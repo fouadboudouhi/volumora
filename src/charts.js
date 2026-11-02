@@ -1,12 +1,11 @@
 // Canvas line charts with crosshair tooltips, plus the aggregations the analytics screen shows.
 import { fmtNumber, t } from './i18n.js';
-import { groupOf } from './library.js';
 import { setScore, trackTypeOf } from './sets.js';
 import { state } from './state.js';
 import { frequency, groupSetsPerWeek, strengthVsBodyweight, weeklyVolume } from './stats.js';
 import { getBody, getHistory } from './storage.js';
 import { toDisplay, unit } from './units.js';
-import { dayKey, exerciseKey, fmtDate, rangeCutoff, setVolume, volumeOf } from './util.js';
+import { dayKey, exerciseKey, fmtDate, rangeCutoff, volumeOf } from './util.js';
 
 const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const fmt = (value, suffix) => `${fmtNumber(Math.round(value))}${suffix}`;
@@ -201,20 +200,6 @@ export function lineChart(
 const inRange = (cutoff) => (item) => !cutoff || (item.day || dayKey(item.finishedAt || item.date)) >= cutoff;
 export const historyInRange = (range) => getHistory().filter(inRange(rangeCutoff(range)));
 export const bodyInRange = (range) => getBody().filter(inRange(rangeCutoff(range)));
-
-// Completed working-set volume per muscle group, largest first.
-export function volumeByMuscle(history) {
-  const totals = new Map();
-  history.forEach((h) =>
-    h.entries?.forEach((e) => {
-      const volume = e.sets.reduce((s, set) => s + setVolume(set, e.trackType), 0);
-      if (!volume) return;
-      const group = groupOf(e);
-      totals.set(group, (totals.get(group) || 0) + volume);
-    })
-  );
-  return [...totals].map(([group, volume]) => ({ group, volume })).sort((a, b) => b.volume - a.volume);
-}
 
 export const weightPoints = (range) =>
   bodyInRange(range)
