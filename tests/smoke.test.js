@@ -2883,9 +2883,14 @@ test('coming back to a running workout lands on the next open set', async () => 
   await page.click('.resume-card [data-start]');
   await page.waitForSelector('.workout-exercise');
   await check('from home');
+  // A slow phone: the page finishes loading well after the first frame.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   await page.reload();
   await page.waitForSelector('.workout-exercise');
+  await page.waitForTimeout(500);
   await check('after closing the app');
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
   // Ticking inside the workout leaves the page where it is.
   const before = (await spot()).y;
   await tick(2, 1);

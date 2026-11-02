@@ -67,6 +67,9 @@ export const scrollToTop = () => {
   window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   $app.scrollTop = 0;
 };
+// Where a view opens: the top, except a running workout, which continues at the next open set.
+export const scrollToStart = () =>
+  state.view === 'workout' ? workout.scrollToCurrent(scrollToTop) : scrollToTop();
 
 // How a view arrives: deeper screens slide in from the right, going back slides in from the left, full-screen
 // flows (workout, editor, assistant) rise like a modal, a tab switch fades.
@@ -143,10 +146,7 @@ export function render() {
   if (focusKey) document.querySelector(focusKey)?.focus({ preventScroll: true });
   bindShell();
   (VIEWS[state.view] || more).bind();
-  if (viewChanged)
-    requestAnimationFrame(() =>
-      state.view === 'workout' ? workout.scrollToCurrent(scrollToTop) : scrollToTop()
-    );
+  if (viewChanged) requestAnimationFrame(scrollToStart);
   requestAnimationFrame(redrawCharts);
   if (state.view === 'workout') workout.updateRest();
 }
