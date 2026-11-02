@@ -29,7 +29,7 @@ const setRow = (set, si, ei, showRir, trackType, workNumber) => {
 };
 
 const sessionParent = () =>
-  ['calendar', 'ai'].includes(state.sessionFrom) ? state.sessionFrom : 'analytics';
+  ['calendar', 'ai', 'home'].includes(state.sessionFrom) ? state.sessionFrom : 'analytics';
 
 export function view() {
   const session = getHistory().find((h) => h.id === state.sessionId);

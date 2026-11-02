@@ -11,6 +11,7 @@ import { esc, exerciseKey, fmtLong, number, volumeOf } from '../util.js';
 import { empty } from './shell.js';
 
 const RANGES = ['4w', '3m', '1y', 'all'];
+const TABS = ['overview', 'strength', 'sessions'];
 const markerText = (h) =>
   [
     h.markers?.deload ? t('marker.deload') : '',
@@ -23,13 +24,21 @@ const markerText = (h) =>
 // Sets per muscle group this week or averaged over four weeks, with the 10–20 guideline marked on each bar.
 function weeklySetsSection() {
   const avg = state.analyticsWeekMode === 'avg';
-  const rows = weeklySets(getHistory(), { weeks: avg ? 4 : 1 });
+  let rows = weeklySets(getHistory(), { weeks: avg ? 4 : 1 });
+  // A week that has not started yet says nothing; the last one does.
+  let fallback = '';
+  if (!avg && !rows.length) {
+    const lastWeek = new Date();
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    rows = weeklySets(getHistory(), { weeks: 1, today: lastWeek });
+    if (rows.length) fallback = `<p class="muted analytics-hint">${t('analytics.lastWeekShown')}</p>`;
+  }
   const scale = Math.max(24, ...rows.map((r) => r.sets));
   const toggle = `<div class="segmented small" role="group" aria-label="${t('analytics.weeklySets')}"><button type="button" class="${avg ? '' : 'active'}" data-week-mode="week" aria-pressed="${!avg}">${t('analytics.thisWeek')}</button><button type="button" class="${avg ? 'active' : ''}" data-week-mode="avg" aria-pressed="${avg}">${t('analytics.fourWeekAvg')}</button></div>`;
   const list = rows.length
     ? `<div class="bar-list weekly-sets"><div class="bar-scale" aria-hidden="true"><small style="left:${(10 / scale) * 100}%">10</small><small style="left:${(20 / scale) * 100}%">20</small></div>${rows.map((r) => `<div class="bar-row"><span>${esc(groupLabel(r.group))}</span><div class="bar-track target"><i style="width:${Math.max(2, (r.sets / scale) * 100)}%"></i><em style="left:${(10 / scale) * 100}%"></em><em style="left:${(20 / scale) * 100}%"></em></div><b>${fmtNumber(r.sets, { maximumFractionDigits: 1 })}</b></div>`).join('')}</div><p class="muted analytics-hint">${t('analytics.setsTarget')}</p>`
     : `<p class="muted">${t('analytics.noWeeklySets')}</p>`;
-  return `<section class="chart-section"><div class="section-head"><h2>${t('analytics.weeklySets')}</h2></div>${toggle}${list}</section>`;
+  return `<section class="chart-section"><div class="section-head"><h2>${t('analytics.weeklySets')}</h2></div>${toggle}${fallback}${list}</section>`;
 }
 
 const MAX_ROWS = 8;
@@ -157,18 +166,24 @@ export function view() {
   if (!history.length) {
     return `<main class="shell">${head}${rangeControl}${empty(t('history.emptyTitle'), t('history.emptyText'), { label: t('history.emptyAction'), attrs: 'data-nav="home"' })}</main>`;
   }
+  const tab = TABS.includes(state.analyticsTab) ? state.analyticsTab : 'overview';
+  const tabs = `<div class="segmented analytics-tabs" role="tablist" aria-label="${t('history.title')}">${TABS.map((key) => `<button type="button" role="tab" class="${key === tab ? 'active' : ''}" data-analytics-tab="${key}" aria-selected="${key === tab}">${t(`analytics.tab.${key}`)}</button>`).join('')}</div>`;
+  const sections = {
+    overview: `<div class="stat-row"><div><b>${history.length}</b><span>${t('history.sessions')}</span></div><div><b>${fmtNumber(Math.round(toDisplay(totalVolume)))}</b><span>${t('history.volume', { unit: unit() })}</span></div><div><b>${history.reduce((n, h) => n + number(h.totalSets), 0)}</b><span>${t('history.sets')}</span></div></div>
+    ${weeklySetsSection()}
+    <section class="chart-section"><h2>${t('analytics.weeklyVolume')}</h2><canvas id="weeklyVolumeChart" height="180" role="img" aria-label="${t('analytics.weeklyVolumeAria')}"></canvas></section>
+    <section class="chart-section"><h2>${t('analytics.frequency')}</h2><canvas id="frequencyChart" height="160" role="img" aria-label="${t('analytics.frequencyAria')}"></canvas></section>`,
+    strength: `${trendSection(history, exercises, selected)}
+    ${hasBody ? `<section class="chart-section"><h2>${esc(t('analytics.bodyStrengthOf', { name: exercises.get(selected) || '' }))}</h2><canvas id="bodyStrengthChart" height="200" role="img" aria-label="${t('analytics.bodyStrengthAria')}"></canvas><p class="muted analytics-hint" id="bodyStrengthHint">${t('analytics.bodyStrengthHint')}</p><p class="muted analytics-hint" id="bodyStrengthEmpty" hidden>${t('analytics.bodyStrengthEmpty')}</p></section>` : ''}
+    <section class="chart-section"><h2>${t('history.muscles')}</h2><div class="bar-list">${muscles.map((m) => `<div class="bar-row"><span>${esc(groupLabel(m.group))}</span><div class="bar-track"><i style="width:${Math.max(2, (m.volume / maxMuscle) * 100)}%"></i></div><b>${fmtVolume(m.volume)}</b></div>`).join('')}</div><p class="muted analytics-hint">${t('analytics.musclesHint')}</p></section>`,
+    sessions: `<section class="chart-section"><h2>${t('history.volumeChart')}</h2><canvas id="volumeChart" height="200" role="img" aria-label="${t('history.volumeChartAria')}"></canvas></section>
+    ${timelineSection(history)}
+    <section class="list-section"><h2>${t('history.sessions')}</h2><div class="list">${rows}</div></section>`,
+  };
   return `<main class="shell">${head}
     ${rangeControl}
-    <div class="stat-row"><div><b>${history.length}</b><span>${t('history.sessions')}</span></div><div><b>${fmtNumber(Math.round(toDisplay(totalVolume)))}</b><span>${t('history.volume', { unit: unit() })}</span></div><div><b>${history.reduce((n, h) => n + number(h.totalSets), 0)}</b><span>${t('history.sets')}</span></div></div>
-    ${weeklySetsSection()}
-    <section class="chart-section"><h2>${t('history.volumeChart')}</h2><canvas id="volumeChart" height="200" role="img" aria-label="${t('history.volumeChartAria')}"></canvas></section>
-    ${trendSection(history, exercises, selected)}
-    ${hasBody ? `<section class="chart-section"><h2>${esc(t('analytics.bodyStrengthOf', { name: exercises.get(selected) || '' }))}</h2><canvas id="bodyStrengthChart" height="200" role="img" aria-label="${t('analytics.bodyStrengthAria')}"></canvas><p class="muted analytics-hint" id="bodyStrengthHint">${t('analytics.bodyStrengthHint')}</p><p class="muted analytics-hint" id="bodyStrengthEmpty" hidden>${t('analytics.bodyStrengthEmpty')}</p></section>` : ''}
-    <section class="chart-section"><h2>${t('analytics.weeklyVolume')}</h2><canvas id="weeklyVolumeChart" height="180" role="img" aria-label="${t('analytics.weeklyVolumeAria')}"></canvas></section>
-    <section class="chart-section"><h2>${t('analytics.frequency')}</h2><canvas id="frequencyChart" height="160" role="img" aria-label="${t('analytics.frequencyAria')}"></canvas></section>
-    <section class="chart-section"><h2>${t('history.muscles')}</h2><div class="bar-list">${muscles.map((m) => `<div class="bar-row"><span>${esc(groupLabel(m.group))}</span><div class="bar-track"><i style="width:${Math.max(2, (m.volume / maxMuscle) * 100)}%"></i></div><b>${fmtVolume(m.volume)}</b></div>`).join('')}</div></section>
-    ${timelineSection(history)}
-    <section class="list-section"><h2>${t('history.sessions')}</h2><div class="list">${rows}</div></section></main>`;
+    ${tabs}
+    ${sections[tab]}</main>`;
 }
 
 export function bind() {
@@ -196,6 +211,12 @@ export function bind() {
   document.querySelector('#trendAll')?.addEventListener('click', () => {
     state.analyticsAll = true;
     render();
+  });
+  document.querySelectorAll('[data-analytics-tab]').forEach((b) => {
+    b.onclick = () => {
+      state.analyticsTab = b.dataset.analyticsTab;
+      render();
+    };
   });
   document.querySelectorAll('[data-range]').forEach((b) => {
     b.onclick = () => {

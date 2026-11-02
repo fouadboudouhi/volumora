@@ -13,6 +13,7 @@ export const state = {
   analyticsRange: '3m',
   analyticsWeekMode: 'week',
   analyticsListMode: 'exercises',
+  analyticsTab: 'overview',
   analyticsGroup: null,
   analyticsCollapsed: false,
   analyticsAll: false,
