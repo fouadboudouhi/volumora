@@ -2008,3 +2008,96 @@ test('currentSpot finds the next open set after the exercise ticked last', async
     'a workout from before this field still resolves'
   );
 });
+
+test('the server updates itself only after green CI, and goes back when the new version does not come up', async () => {
+  const { mkdtemp, mkdir, readFile, rm, writeFile, copyFile, chmod } = await import('node:fs/promises');
+  const { execFile } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = await mkdtemp(join(tmpdir(), 'volumora-update-'));
+  const dir = join(root, 'server');
+  const bin = join(root, 'bin');
+  await mkdir(join(dir, 'data'), { recursive: true });
+  await mkdir(bin);
+  await writeFile(join(dir, 'data', 'keep.json'), '{}');
+  await copyFile(new URL('../sync-server/auto-update.sh', import.meta.url), join(dir, 'auto-update.sh'));
+  await writeFile(join(dir, 'server.js'), 'old');
+  await writeFile(join(dir, 'admin.js'), 'admin');
+  await writeFile(join(dir, 'package.json'), '{}');
+  // Stand-ins for the network and Docker. Whatever is in env decides what they answer.
+  const stub = async (name, body) => {
+    await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`);
+    await chmod(join(bin, name), 0o755);
+  };
+  await stub('git', 'printf "$REMOTE_SHA\\trefs/heads/main\\n"');
+  await stub('docker', `echo "$(cat ${dir}/server.js)" >> ${root}/builds`);
+  await stub(
+    'curl',
+    `for a in "$@"; do last="$a"; done
+case "$last" in
+  *check-runs*) echo "{\\"conclusion\\": \\"$CI\\"}" ;;
+  *raw.githubusercontent*) while [ "$1" != -o ]; do shift; done; case "$2" in
+    */server.js) printf '%s' "$REMOTE_SERVER" > "$2" ;;
+    */admin.js) printf admin > "$2" ;;
+    *) printf '{}' > "$2" ;;
+  esac ;;
+  *) [ "$(cat ${dir}/server.js)" = broken ] && printf 000 || printf 401 ;;
+esac`
+  );
+  const run = (env) =>
+    new Promise((resolve) =>
+      execFile(
+        join(dir, 'auto-update.sh'),
+        {
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            HEALTH_TRIES: '2',
+            HEALTH_WAIT: '0',
+            ...env,
+          },
+        },
+        (error, stdout) => resolve({ code: error ? error.code : 0, stdout })
+      )
+    );
+  const server = () => readFile(join(dir, 'server.js'), 'utf8');
+  const builds = async () =>
+    (await readFile(join(root, 'builds'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
+  try {
+    let result = await run({ REMOTE_SHA: 'a1', REMOTE_SERVER: 'old', CI: 'success' });
+    assert.equal(result.code, 0);
+    assert.deepEqual(await builds(), [], 'nothing to do without a change in the server files');
+
+    await run({ REMOTE_SHA: 'a2', REMOTE_SERVER: 'new', CI: 'failure' });
+    assert.equal(await server(), 'old', 'failed CI changes nothing');
+    await run({ REMOTE_SHA: 'a2', REMOTE_SERVER: 'new', CI: 'null' });
+    assert.equal(await server(), 'old', 'running CI changes nothing');
+    assert.deepEqual(await builds(), []);
+
+    result = await run({ REMOTE_SHA: 'a2', REMOTE_SERVER: 'new', CI: 'success' });
+    assert.equal(result.code, 0);
+    assert.equal(await server(), 'new', 'the same commit goes through once CI is green');
+    assert.deepEqual(await builds(), ['new']);
+    assert.match(result.stdout, /running a2/);
+    assert.equal(await readFile(join(dir, 'previous', 'server.js'), 'utf8'), 'old');
+
+    await run({ REMOTE_SHA: 'a2', REMOTE_SERVER: 'new', CI: 'success' });
+    assert.deepEqual(await builds(), ['new'], 'a commit it has handled is not built again');
+
+    result = await run({ REMOTE_SHA: 'a3', REMOTE_SERVER: 'broken', CI: 'success' });
+    assert.equal(result.code, 1);
+    assert.equal(await server(), 'new', 'a version that does not come up is replaced by the previous one');
+    assert.deepEqual(await builds(), ['new', 'broken', 'new']);
+    assert.match(result.stdout, /back on the previous version/);
+
+    await run({ REMOTE_SHA: 'a3', REMOTE_SERVER: 'broken', CI: 'success' });
+    assert.deepEqual(
+      await builds(),
+      ['new', 'broken', 'new'],
+      'a broken version gets one try, not one every five minutes'
+    );
+    assert.equal(await readFile(join(dir, 'data', 'keep.json'), 'utf8'), '{}');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

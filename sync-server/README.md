@@ -6,6 +6,15 @@ Accounts are folders under `data/users/`; registration needs an invitation code.
 Run it with `docker compose up -d --build`. It listens on 127.0.0.1:8787; put HTTPS in front of it, for example
 Tailscale Funnel (`tailscale funnel --bg 8787`) or Caddy with `reverse_proxy 127.0.0.1:8787` and `request_body { max_size 64MB }`.
 
+Updates, optional: `auto-update.sh` checks main every five minutes and rebuilds once the new commit's CI has passed. If
+the server does not come up it goes back to the previous version; the last copy of the code and `data/` is in `previous/`.
+It only updates `server.js`, `admin.js` and `package.json`. Changes to `Dockerfile`, `docker-compose.yml` or the script
+itself still need copying by hand. Switch it on once, with the script copied to the server folder:
+
+```
+(crontab -l 2>/dev/null; echo '*/5 * * * * flock -n /tmp/volumora-update.lock $HOME/volumora-sync/auto-update.sh >> $HOME/volumora-sync/auto-update.log 2>&1') | crontab -
+```
+
 Administration, run on the server:
 
 ```
