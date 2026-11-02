@@ -230,8 +230,11 @@ function exerciseIdFor(name) {
     };
   return names.map.get(fold(name.replace(/\*\*/g, '')));
 }
+// One long value sets the whole card to name above value, so its rows never differ from one another.
+const INLINE_VALUE = 12;
+const longValue = ([, value = '']) => value.replace(/\*\*/g, '').length > INLINE_VALUE;
 function rowHtml([name, value = '', ...note]) {
-  const inner = `<span>${inline(name)}${note.length ? `<small>${inline(note.join(' · '))}</small>` : ''}</span><b>${inline(value)}</b>`;
+  const inner = `<span>${inline(name)}</span><b>${inline(value)}</b>${note.length ? `<small>${inline(note.join(' · '))}</small>` : ''}`;
   const id = exerciseIdFor(name);
   return id
     ? `<button type="button" class="chat-row" data-exercise="${esc(id)}">${inner}${icon('chevron-right')}</button>`
@@ -267,7 +270,7 @@ export function replyHtml(text, { live = false } = {}) {
   const closeCard = () => {
     if (card?.rows.length)
       parts.push(
-        `<section class="chat-card">${card.title ? `<h3>${inline(card.title)}</h3>` : ''}${card.rows.join('')}</section>`
+        `<section class="chat-card${card.stacked ? ' stacked' : ''}">${card.title ? `<h3>${inline(card.title)}</h3>` : ''}${card.rows.join('')}</section>`
       );
     else if (card?.title) parts.push(`<h3 class="chat-heading">${inline(card.title)}</h3>`);
     card = null;
@@ -293,7 +296,9 @@ export function replyHtml(text, { live = false } = {}) {
       } else if (item?.[1].includes(' | ')) {
         closeList();
         card ||= { title: '', rows: [] };
-        card.rows.push(rowHtml(item[1].split(' | ').map((cell) => cell.trim())));
+        const cells = item[1].split(' | ').map((cell) => cell.trim());
+        card.stacked ||= longValue(cells);
+        card.rows.push(rowHtml(cells));
       } else if (item) {
         closeCard();
         (list ||= []).push(`<li>${inline(item[1])}</li>`);

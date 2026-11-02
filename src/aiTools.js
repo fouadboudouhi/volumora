@@ -111,7 +111,7 @@ function historyData({ days, exercise_id, limit }) {
       kcal_rough_estimate: caloriesOf(s),
       marked: Object.keys(s.markers || {}).filter((key) => s.markers[key]),
       exercises: (s.entries || [])
-        .filter((e) => !exercise_id || exerciseKey(e) === exercise_id)
+        .filter((e) => !exercise_id || exerciseKey(e) === exerciseKey({ id: exercise_id }))
         .map((e) => ({
           exercise_id: exerciseKey(e),
           name: exerciseName(e),
@@ -135,7 +135,7 @@ function exerciseData({ exercise_id }) {
   const entries = history
     .flatMap((s) =>
       (s.entries || [])
-        .filter((e) => exerciseKey(e) === lib.id)
+        .filter((e) => exerciseKey(e) === exerciseKey(lib))
         .map((e) => ({
           date: dayKey(s.day || s.finishedAt),
           sets: e.sets.filter((x) => x.done && isWorkSet(x)).map((x) => setText(x, entryTrackType(e))),
@@ -293,7 +293,7 @@ function buildExercises(list, previous = []) {
     }
     if (seen.has(source.id)) return [];
     seen.add(source.id);
-    const old = previous.find((ex) => exerciseKey(ex) === source.id);
+    const old = previous.find((ex) => exerciseKey(ex) === exerciseKey(source));
     const base = old ? clone(old) : planExerciseFromLibrary(source);
     if (x.sets !== undefined) base.sets = setsCount(x.sets);
     if (x.range !== undefined) base.range = normalizeRange(x.range, base.range);

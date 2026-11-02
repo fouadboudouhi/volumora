@@ -1746,18 +1746,18 @@ test('stopping an answer leaves no error and the question returns when nothing a
   assert.equal(await page.inputValue('#aiInput'), 'Hallo');
 });
 
-test('a long value in a chat card moves below its name instead of squeezing it', async () => {
+test('one long value stacks the whole chat card, short values stay beside the name', async () => {
   await addAiKey();
   await page.setViewportSize({ width: 390, height: 844 });
   await mockClaude({
     onMessage: () => ({
-      text: '## Über dich\n- Erfahrung | 2–3 Jahre\n- Rechte Schulter | Aktivierte Arthrose im AC-Gelenk, kein Drücken über Kopf\n- Bankdrücken mit der Langhantel auf der Flachbank | 3×8–12',
+      text: '## Über dich\n- Erfahrung | 2–3 Jahre\n- Rechte Schulter | Aktivierte Arthrose im AC-Gelenk, kein Drücken über Kopf | Seit März\n- Bankdrücken mit der Langhantel auf der Flachbank | 3×8–12\n\n## Plan\n- Brustpresse | 3×8–12 | 3 Min. Pause\n- Bankdrücken mit der Langhantel auf der Flachbank | 45 kg, 3×11',
     }),
   });
   await page.click('[data-nav="ai"]');
   await page.fill('#aiInput', 'Was weißt du?');
   await page.click('#aiSend');
-  await page.waitForSelector('.chat-card .chat-row:nth-of-type(3)');
+  await page.waitForFunction(() => document.querySelectorAll('.chat-row').length === 5);
   const rows = await page.$$eval('.chat-row', (items) =>
     items.map((row) => {
       const name = row.querySelector('span').getBoundingClientRect();
@@ -1772,9 +1772,14 @@ test('a long value in a chat card moves below its name instead of squeezing it',
   );
   assert.deepEqual(
     rows.map((r) => r.stacked),
-    [false, true, false],
-    'only the long value gets its own line'
+    [true, true, true, false, false],
+    'a card is all one layout'
   );
+  const note = await page.$eval('.chat-card.stacked .chat-row:has(small)', (row) => ({
+    value: row.querySelector('b').getBoundingClientRect().bottom,
+    note: row.querySelector('small').getBoundingClientRect().top,
+  }));
+  assert.ok(note.note >= note.value - 1, 'the note comes after the value');
   assert.ok(
     rows.every((r) => r.fits && r.nameWidth > 100),
     JSON.stringify(rows)
@@ -2423,11 +2428,14 @@ test('progress lists exercises and muscle groups side by side, and a tap opens t
   await page.click('[data-analytics-tab="strength"]');
   await page.waitForSelector('.trend-row');
   assert.equal(await page.locator('#analyticsExercise').count(), 0);
-  assert.equal(await page.locator('.trend-row[aria-expanded="true"]').count(), 1);
-  await page.waitForFunction(() => document.querySelector('#strengthChart')?.width > 0);
+  assert.equal(await page.locator('.trend-row[aria-expanded="true"]').count(), 0, 'everything starts closed');
+  assert.equal(await page.locator('#strengthChart').count(), 0);
   assert.match(await page.textContent('.analytics-hint:near(.trend-list)'), /geschätztes Maximalgewicht/);
   assert.ok(await page.locator('.trend-row .sparkline').count());
   assert.match(await page.textContent('.trend-row .row-value'), /kg/);
+  await page.locator('.trend-row').first().click();
+  await page.waitForFunction(() => document.querySelector('#strengthChart')?.width > 0);
+  assert.equal(await page.locator('.trend-row[aria-expanded="true"]').count(), 1);
   await page.locator('.trend-row').first().click();
   await page.waitForFunction(() => !document.querySelector('#strengthChart'));
   await page.locator('.trend-row').first().click();
@@ -2895,4 +2903,44 @@ test('coming back to a running workout lands on the next open set', async () => 
   const before = (await spot()).y;
   await tick(2, 1);
   assert.equal(Math.abs((await spot()).y - before) <= 1, true, 'a tick does not jump');
+});
+
+test('the same exercise from the plan and the catalogue is one row with one chart', async () => {
+  await page.evaluate(() => {
+    const session = (id, day, libraryId, weight) => ({
+      id,
+      planId: 'p',
+      planName: 'P',
+      dayId: 'd',
+      dayName: 'D',
+      startedAt: `${day}T09:00:00.000Z`,
+      finishedAt: `${day}T10:00:00.000Z`,
+      day,
+      entries: [
+        {
+          exerciseId: `e-${id}`,
+          libraryId,
+          name: 'Brustpresse',
+          trackType: 'weight_reps',
+          sets: [{ done: true, weight: String(weight), reps: '10', type: 'normal' }],
+        },
+      ],
+    });
+    localStorage.setItem(
+      'volumora-history-v2',
+      JSON.stringify([session('b', '2026-10-30', '0577', 60), session('a', '2026-10-28', 'chest-press', 55)])
+    );
+  });
+  await page.reload();
+  await page.waitForSelector('.next-card');
+  await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="strength"]');
+  await page.waitForSelector('.trend-row');
+  const names = await page.$$eval('.trend-row b:first-child', (items) => items.map((x) => x.textContent));
+  assert.equal(names.filter((n) => n === 'Brustpresse').length, 1, names.join(', '));
+  await page.locator('.trend-row').first().click();
+  await page.waitForFunction(() => document.querySelector('#strengthChart')?.width > 0);
+  const values = await page.$eval('.trend-row .row-value', (x) => x.textContent);
+  assert.match(values, /80 kg/, 'the newest session counts, from the catalogue entry');
+  assert.ok(await page.locator('.trend-row .sparkline :is(polyline, path)').count(), 'two points, so a line');
 });

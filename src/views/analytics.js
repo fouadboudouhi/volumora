@@ -82,7 +82,7 @@ function exerciseRows(history, exercises, selected) {
   );
   const keys = [...exercises.keys()].sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0));
   const shown = state.analyticsAll ? keys : keys.slice(0, MAX_ROWS);
-  if (selected && !shown.includes(selected)) shown[shown.length - 1] = selected;
+  if (selected && !state.analyticsCollapsed && !shown.includes(selected)) shown[shown.length - 1] = selected;
   const oldestFirst = history.slice().reverse();
   const rows = shown.map((key) => {
     const { points, suffix } = strengthSeries(oldestFirst, key);

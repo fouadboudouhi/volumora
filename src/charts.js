@@ -211,9 +211,10 @@ export const weightPoints = (range) =>
 // Best score per session, oldest first: estimated 1RM for weighted exercises, otherwise reps, seconds or kilometres.
 export function strengthSeries(history, key) {
   let suffix = ` ${unit()}`;
+  const wanted = exerciseKey({ id: key });
   const points = history
     .map((h) => {
-      const e = h.entries?.find((x) => exerciseKey(x) === key);
+      const e = h.entries?.find((x) => exerciseKey(x) === wanted);
       if (!e) return null;
       const type = e.trackType || trackTypeOf(e);
       const best = Math.max(0, ...e.sets.map((s) => setScore(s, type)));

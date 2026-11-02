@@ -131,4 +131,4 @@ export function allRecords() {
   if (cache.revision !== revision) cache = { revision, records: computeRecords(getHistory()) };
   return cache.records;
 }
-export const recordsFor = (key) => allRecords()[key] || null;
+export const recordsFor = (key) => allRecords()[exerciseKey({ id: key })] || null;

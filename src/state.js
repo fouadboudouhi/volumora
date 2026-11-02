@@ -15,7 +15,7 @@ export const state = {
   analyticsListMode: 'exercises',
   analyticsTab: 'overview',
   analyticsGroup: null,
-  analyticsCollapsed: false,
+  analyticsCollapsed: true,
   analyticsAll: false,
   sessionId: null,
   openNotes: null,
