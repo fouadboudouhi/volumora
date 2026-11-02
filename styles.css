@@ -7427,3 +7427,8 @@ textarea,
     grid-column: 1 / -1;
   }
 }
+
+/* Scrolled to on return to a workout: the running rest timer must not cover the set */
+.set-row {
+  scroll-margin-bottom: 96px;
+}

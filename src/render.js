@@ -143,7 +143,10 @@ export function render() {
   if (focusKey) document.querySelector(focusKey)?.focus({ preventScroll: true });
   bindShell();
   (VIEWS[state.view] || more).bind();
-  if (viewChanged) requestAnimationFrame(scrollToTop);
+  if (viewChanged)
+    requestAnimationFrame(() =>
+      state.view === 'workout' ? workout.scrollToCurrent(scrollToTop) : scrollToTop()
+    );
   requestAnimationFrame(redrawCharts);
   if (state.view === 'workout') workout.updateRest();
 }

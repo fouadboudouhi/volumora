@@ -1952,3 +1952,59 @@ test('usage keeps older months and a token with an odd name is no session', asyn
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test('currentSpot finds the next open set after the exercise ticked last', async () => {
+  const { currentSpot } = await import('../src/workout.js');
+  const set = (done) => ({ done, weight: '50', reps: '10' });
+  const entry = (sets, lastSetAt) => ({ sets: sets.map(set), ...(lastSetAt ? { lastSetAt } : {}) });
+  const session = (entries, supersets = []) => ({
+    detached: true,
+    exercises: entries.map((_, i) => ({ id: `e${i}`, supersetId: supersets[i] })),
+    entries,
+  });
+  assert.equal(currentSpot(session([entry([false, false]), entry([false])])), null, 'nothing logged yet');
+  assert.deepEqual(
+    currentSpot(session([entry([true, true], 't1'), entry([true, false, false], 't2'), entry([false])])),
+    { exercise: 1, set: 1 }
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([false, false]), entry([true, true], 't1'), entry([false])])),
+    { exercise: 2, set: 0 },
+    'a skipped exercise does not pull back'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([false, false]), entry([true, true], 't1')])),
+    { exercise: 0, set: 0 },
+    'the skipped exercise comes up once the end is reached'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([true, false], 't2'), entry([true, true], 't1')])),
+    { exercise: 0, set: 1 },
+    'the time decides, not the order'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([false, true, false], 't1')])),
+    { exercise: 0, set: 2 },
+    'a skipped warm-up stays behind'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([true, false], 't1'), entry([true, false], 't2')], ['a', 'a'])),
+    { exercise: 0, set: 1 },
+    'after a full superset round the first member is next'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([true, false], 't1'), entry([false, false])], ['a', 'a'])),
+    { exercise: 1, set: 0 },
+    'inside a round the other member is next'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([true], 't2'), entry([true, true], 't1')])),
+    { exercise: 0, set: 0 },
+    'all done stays at the exercise ticked last'
+  );
+  assert.deepEqual(
+    currentSpot(session([entry([true, false]), entry([false])])),
+    { exercise: 0, set: 1 },
+    'a workout from before this field still resolves'
+  );
+});
