@@ -1,4 +1,4 @@
-import { drawAnalytics, historyInRange, strengthSeries, volumeByMuscle } from '../charts.js';
+import { drawAnalytics, historyInRange, strengthSeries } from '../charts.js';
 import { fmtNumber, plural, t } from '../i18n.js';
 import { icon } from '../icons.js';
 import { exerciseName, groupLabel } from '../library.js';
@@ -152,8 +152,6 @@ export function view() {
     state.analyticsExercise = exercises.keys().next().value || null;
   const selected = state.analyticsExercise;
   const totalVolume = history.reduce((s, h) => s + (h.volume || volumeOf(h)), 0);
-  const muscles = volumeByMuscle(history);
-  const maxMuscle = muscles[0]?.volume || 1;
   const hasBody = getBody().some((b) => number(b.weight));
   const rangeControl = `<div class="segmented" role="group" aria-label="${t('range.aria')}">${RANGES.map((key) => `<button type="button" class="${key === range ? 'active' : ''}" data-range="${key}" aria-pressed="${key === range}">${t(`range.${key}`)}</button>`).join('')}</div>`;
   const rows = history
@@ -174,8 +172,7 @@ export function view() {
     <section class="chart-section"><h2>${t('analytics.weeklyVolume')}</h2><canvas id="weeklyVolumeChart" height="180" role="img" aria-label="${t('analytics.weeklyVolumeAria')}"></canvas></section>
     <section class="chart-section"><h2>${t('analytics.frequency')}</h2><canvas id="frequencyChart" height="160" role="img" aria-label="${t('analytics.frequencyAria')}"></canvas></section>`,
     strength: `${trendSection(history, exercises, selected)}
-    ${hasBody ? `<section class="chart-section"><h2>${esc(t('analytics.bodyStrengthOf', { name: exercises.get(selected) || '' }))}</h2><canvas id="bodyStrengthChart" height="200" role="img" aria-label="${t('analytics.bodyStrengthAria')}"></canvas><p class="muted analytics-hint" id="bodyStrengthHint">${t('analytics.bodyStrengthHint')}</p><p class="muted analytics-hint" id="bodyStrengthEmpty" hidden>${t('analytics.bodyStrengthEmpty')}</p></section>` : ''}
-    <section class="chart-section"><h2>${t('history.muscles')}</h2><div class="bar-list">${muscles.map((m) => `<div class="bar-row"><span>${esc(groupLabel(m.group))}</span><div class="bar-track"><i style="width:${Math.max(2, (m.volume / maxMuscle) * 100)}%"></i></div><b>${fmtVolume(m.volume)}</b></div>`).join('')}</div><p class="muted analytics-hint">${t('analytics.musclesHint')}</p></section>`,
+    ${hasBody ? `<section class="chart-section"><h2>${esc(t('analytics.bodyStrengthOf', { name: exercises.get(selected) || '' }))}</h2><canvas id="bodyStrengthChart" height="200" role="img" aria-label="${t('analytics.bodyStrengthAria')}"></canvas><p class="muted analytics-hint" id="bodyStrengthHint">${t('analytics.bodyStrengthHint')}</p><p class="muted analytics-hint" id="bodyStrengthEmpty" hidden>${t('analytics.bodyStrengthEmpty')}</p></section>` : ''}`,
     sessions: `<section class="chart-section"><h2>${t('history.volumeChart')}</h2><canvas id="volumeChart" height="200" role="img" aria-label="${t('history.volumeChartAria')}"></canvas></section>
     ${timelineSection(history)}
     <section class="list-section"><h2>${t('history.sessions')}</h2><div class="list">${rows}</div></section>`,

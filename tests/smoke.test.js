@@ -468,8 +468,8 @@ test('analytics: time range scopes everything, charts show a tooltip, a session 
   assert.equal(await page.locator('.row[data-session]').count(), 1, '3 months hides the 200-day-old session');
   await page.click('[data-range="all"]');
   assert.equal(await page.locator('.row[data-session]').count(), 2);
-  await page.click('[data-analytics-tab="strength"]');
-  assert.match(await page.textContent('.bar-list'), /Brust/);
+  await page.click('[data-analytics-tab="overview"]');
+  assert.match(await page.textContent('.weekly-sets'), /Brust/);
   await page.click('[data-analytics-tab="sessions"]');
   const canvas = page.locator('#volumeChart');
   const box = await canvas.boundingBox();
