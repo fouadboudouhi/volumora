@@ -6976,21 +6976,38 @@ body {
   border-top: 0;
 }
 .chat-row > span {
-  flex: 1 1 55%;
+  flex: 1 1 0;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 .chat-row small {
-  display: block;
+  flex: 0 0 100%;
   margin-top: 2px;
   color: var(--muted);
   font-size: 12.5px;
 }
 .chat-row > b {
-  min-width: 0;
+  flex: none;
   font-weight: 500;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chat-row > b:empty {
+  display: none;
+}
+/* A card with a long value: name, value and note on their own lines in every row */
+.chat-card.stacked .chat-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.chat-card.stacked .chat-row > span,
+.chat-card.stacked .chat-row small {
+  flex: none;
+}
+.chat-card.stacked .chat-row > b {
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
