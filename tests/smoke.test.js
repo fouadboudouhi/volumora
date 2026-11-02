@@ -464,10 +464,13 @@ async function seedHistory() {
 test('analytics: time range scopes everything, charts show a tooltip, a session opens and can be edited or deleted', async () => {
   await seedHistory();
   await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="sessions"]');
   assert.equal(await page.locator('.row[data-session]').count(), 1, '3 months hides the 200-day-old session');
   await page.click('[data-range="all"]');
   assert.equal(await page.locator('.row[data-session]').count(), 2);
+  await page.click('[data-analytics-tab="strength"]');
   assert.match(await page.textContent('.bar-list'), /Brust/);
+  await page.click('[data-analytics-tab="sessions"]');
   const canvas = page.locator('#volumeChart');
   const box = await canvas.boundingBox();
   await canvas.hover({ position: { x: box.width - 20, y: 100 } });
@@ -664,6 +667,7 @@ test('the browser back button closes overlays first and then steps back through 
 test('charts follow the viewport width', async () => {
   await seedHistory();
   await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="sessions"]');
   await page.waitForSelector('#volumeChart');
   const before = await page.locator('#volumeChart').evaluate((c) => c.width);
   await page.setViewportSize({ width: 520, height: 800 });
@@ -813,6 +817,7 @@ test('bodyweight and timed exercises: reps-only sets count, set types can be cha
   await page.click('#summaryDone');
   await page.waitForSelector('.next-card');
   await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="sessions"]');
   await page.waitForSelector('.row[data-session]');
   const history = await page.evaluate(() => JSON.parse(localStorage.getItem('volumora-history-v2')));
   assert.equal(history[0].entries[0].sets[0].time, '90');
@@ -1053,6 +1058,7 @@ test('analytics: sets per week with a four-week toggle, weekly charts and the re
   assert.ok(await page.locator('#weeklyVolumeChart').evaluate((c) => c.width > 0));
   assert.ok(await page.locator('#frequencyChart').evaluate((c) => c.width > 0));
   await page.click('[data-range="all"]');
+  await page.click('[data-analytics-tab="sessions"]');
   await page.waitForSelector('[data-session-record] .chip-green');
   assert.match(await page.textContent('[data-session-record] .chip-green'), /Bestwert/);
 });
@@ -1138,6 +1144,7 @@ test('a Hevy export merges into the history and unknown exercises become custom 
   await page.click('[data-nav="analytics"]');
   // The fixture is from 2024: widen the range to everything.
   await page.click('[data-range="all"]');
+  await page.click('[data-analytics-tab="sessions"]');
   await page.waitForSelector('[data-session]');
   assert.equal(await page.locator('[data-session]').count(), 2);
   assert.match(await page.textContent('main'), /Push Day/);
@@ -2111,10 +2118,6 @@ test('progress explains itself: whole counts, labelled marks, a hint instead of 
   const value = await page.$eval('.weekly-sets .bar-row b', (b) => b.getBoundingClientRect().right);
   assert.ok(value <= 390, `the set count stays on screen, ends at ${value}`);
   assert.ok(await page.$eval('.weekly-sets .bar-row b', (b) => b.scrollWidth <= b.clientWidth + 1));
-  // One workout of the chosen exercise: a hint, and no empty canvas.
-  await page.waitForSelector('#bodyStrengthEmpty:not([hidden])');
-  assert.equal(await page.locator('#bodyStrengthChart').isVisible(), false);
-  assert.equal(await page.locator('#bodyStrengthHint').isVisible(), false);
   // Count axes draw no halves: record what is written on the canvas.
   const labels = await page.evaluate(async () => {
     const written = [];
@@ -2130,6 +2133,11 @@ test('progress explains itself: whole counts, labelled marks, a hint instead of 
     return written.filter((text) => /^\d+$/.test(text));
   });
   assert.deepEqual(labels.slice(0, 2), ['1', '0']);
+  await page.click('[data-analytics-tab="strength"]');
+  // One workout of the chosen exercise: a hint, and no empty canvas.
+  await page.waitForSelector('#bodyStrengthEmpty:not([hidden])');
+  assert.equal(await page.locator('#bodyStrengthChart').isVisible(), false);
+  assert.equal(await page.locator('#bodyStrengthHint').isVisible(), false);
 });
 
 test('no field is small enough for an iPhone to zoom into it', async () => {
@@ -2410,6 +2418,7 @@ test('progress lists exercises and muscle groups side by side, and a tap opens t
   await page.setViewportSize({ width: 390, height: 844 });
   await page.click('[data-nav="analytics"]');
   await page.click('[data-range="all"]');
+  await page.click('[data-analytics-tab="strength"]');
   await page.waitForSelector('.trend-row');
   assert.equal(await page.locator('#analyticsExercise').count(), 0);
   assert.equal(await page.locator('.trend-row[aria-expanded="true"]').count(), 1);
@@ -2777,4 +2786,55 @@ test('review fixes: the KI tab survives a failed upload, short workouts show no 
   );
   const count = Number((await page.textContent('#libraryCount')).match(/\d+/)[0]);
   assert.ok(count > 0 && count < 50, `matches counted: ${count}`);
+});
+
+test('home: last workout, week dots, exercise preview; progress: tabs, last-week fallback, helping muscles count half', async () => {
+  await seedHistory();
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Home
+  assert.equal(await page.locator('.week-ring').count(), 0, 'no second week count');
+  assert.equal(await page.locator('.week-dots span').count(), 7);
+  assert.equal(await page.locator('.week-dots .done').count(), 1);
+  assert.match(await page.textContent('.week-line'), /1 von 3 Trainings/);
+  assert.match(await page.textContent('[data-last-session]'), /heute/);
+  assert.match(await page.textContent('.next-preview'), /·/);
+  await page.click('[data-last-session]');
+  await page.waitForSelector('#sessionForm');
+  await page.click('.backrow .back');
+  await page.waitForSelector('.next-card');
+  await axeCheck('home');
+  // Progress: three tabs, the overview shows this week's sets, where the pull-up counts half for the arms.
+  await page.click('[data-nav="analytics"]');
+  await page.waitForSelector('.analytics-tabs');
+  assert.equal(await page.locator('[data-analytics-tab]').count(), 3);
+  assert.equal(await page.locator('.row[data-session]').count(), 0, 'the list lives on its own tab');
+  const groups = await page.$$eval('.weekly-sets .bar-row', (rows) =>
+    rows.map((r) => r.querySelector('span').textContent + ' ' + r.querySelector('b').textContent)
+  );
+  assert.ok(
+    groups.some((g) => /^Brust 2$/.test(g)),
+    groups.join(', ')
+  );
+  assert.match(await page.textContent('.chart-section'), /Nebenmuskeln zählen halb/);
+  await page.click('[data-analytics-tab="strength"]');
+  await page.waitForSelector('.trend-row');
+  await page.click('[data-analytics-tab="sessions"]');
+  await page.waitForSelector('.row[data-session]');
+  await page.click('[data-nav="home"]');
+  await page.click('[data-nav="analytics"]');
+  assert.equal((await page.locator('.row[data-session]').count()) > 0, true, 'the tab is remembered');
+  // An empty week falls back to the last one.
+  await page.evaluate(() => {
+    const history = JSON.parse(localStorage.getItem('volumora-history-v2'));
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    history[0].day = key;
+    history[0].finishedAt = `${key}T10:00:00.000Z`;
+    localStorage.setItem('volumora-history-v2', JSON.stringify(history));
+  });
+  await page.click('[data-analytics-tab="overview"]');
+  await page.waitForSelector('.weekly-sets');
+  assert.match(await page.textContent('.chart-section'), /letzte Woche/);
+  assert.match(await page.textContent('.weekly-sets'), /Brust/);
 });

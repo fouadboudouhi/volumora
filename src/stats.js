@@ -1,5 +1,5 @@
 // Aggregations over sessions for summaries and analytics.
-import { groupOf } from './library.js';
+import { groupOf, libraryOf } from './library.js';
 import { setScore } from './sets.js';
 import {
   dayKey,
@@ -34,20 +34,60 @@ export function startOfWeek(date = new Date()) {
   return d;
 }
 
-// Working sets per muscle group over the last `weeks` calendar weeks (the current one included), per week.
-export function weeklySets(history, { weeks = 1, today = new Date() } = {}) {
+// Where a set lands when a muscle only helps: biceps on a row, triceps on a press. The catalogue names muscles,
+// the bars show groups.
+const GROUP_OF_MUSCLE = {
+  hamstrings: 'legs',
+  quadriceps: 'legs',
+  calves: 'legs',
+  glutes: 'legs',
+  soleus: 'legs',
+  shoulders: 'shoulders',
+  deltoids: 'shoulders',
+  'rear deltoids': 'shoulders',
+  'rotator cuff': 'shoulders',
+  forearms: 'arms',
+  triceps: 'arms',
+  biceps: 'arms',
+  brachialis: 'arms',
+  core: 'core',
+  'hip flexors': 'core',
+  obliques: 'core',
+  'lower abs': 'core',
+  chest: 'chest',
+  'upper chest': 'chest',
+  'lower back': 'back',
+  'upper back': 'back',
+  traps: 'back',
+  trapezius: 'back',
+  rhomboids: 'back',
+  'latissimus dorsi': 'back',
+};
+// Groups an exercise works on the side, without the one it is for.
+export function helpingGroups(entry) {
+  const main = groupOf(entry);
+  const groups = (libraryOf(entry)?.secondary || []).map((muscle) => GROUP_OF_MUSCLE[muscle]).filter(Boolean);
+  return [...new Set(groups)].filter((group) => group !== main);
+}
+// What each working set adds per group: one for the muscle it is for, `helping` for each one it works on the side.
+function setsByGroupOf(entry, helping) {
+  const sets = entry.sets.filter((s) => s.done && isWorkSet(s)).length;
+  if (!sets) return [];
+  return [[groupOf(entry), sets], ...(helping ? helpingGroups(entry).map((g) => [g, sets * helping]) : [])];
+}
+
+// Working sets per muscle group over the last `weeks` calendar weeks (the current one included), per week. Sets of
+// an exercise count half for the groups that only help, the usual way of counting.
+export function weeklySets(history, { weeks = 1, today = new Date(), helping = 0.5 } = {}) {
   const from = startOfWeek(today);
   from.setDate(from.getDate() - 7 * (weeks - 1));
   const fromKey = dayKey(from);
   const totals = new Map();
   history.forEach((h) => {
     if (sessionDay(h) < fromKey) return;
-    for (const entry of h.entries || []) {
-      const sets = entry.sets.filter((s) => s.done && isWorkSet(s)).length;
-      if (!sets) continue;
-      const group = groupOf(entry);
-      totals.set(group, (totals.get(group) || 0) + sets);
-    }
+    for (const entry of h.entries || [])
+      for (const [group, sets] of setsByGroupOf(entry, helping))
+        totals.set(group, (totals.get(group) || 0) + sets);
   });
   return [...totals]
     .map(([group, sets]) => ({ group, sets: Math.round((sets / weeks) * 10) / 10 }))
@@ -78,7 +118,7 @@ export const frequency = (history, weeks = 12, today = new Date()) => perWeek(hi
 export const groupSetsPerWeek = (history, group, weeks = 12, today = new Date()) =>
   perWeek(history, weeks, today, (h) =>
     (h.entries || []).reduce(
-      (n, e) => (groupOf(e) === group ? n + e.sets.filter((s) => s.done && isWorkSet(s)).length : n),
+      (n, e) => n + setsByGroupOf(e, 0.5).reduce((m, [g, sets]) => (g === group ? m + sets : m), 0),
       0
     )
   );

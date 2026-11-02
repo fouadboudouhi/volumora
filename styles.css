@@ -7345,3 +7345,55 @@ textarea,
     grid-column: 1 / -1;
   }
 }
+
+.next-preview {
+  margin: 6px 0 0 !important;
+  color: var(--ink) !important;
+  font-size: 13.5px !important;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.week-dots {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin: 10px 0 8px;
+}
+.week-dots span {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+.week-dots i {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  color: #06140b;
+}
+.week-dots i .icon {
+  width: 16px;
+  height: 16px;
+}
+.week-dots .done i {
+  background: var(--green);
+  border-color: var(--green);
+}
+.week-dots .today small {
+  color: var(--ink);
+  font-weight: 700;
+}
+.week-dots small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.week-count {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.analytics-tabs {
+  margin: 0 0 14px;
+}
