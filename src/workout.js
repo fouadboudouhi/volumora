@@ -93,7 +93,35 @@ export function toggleSet(session, exerciseIndex, setIndex, lastWork = []) {
   set.done = true;
   touchSession(session);
   session.lastSetAt = session.lastActivityAt;
+  entry.lastSetAt = session.lastActivityAt;
   return true;
+}
+// Where the user is in a running workout: the next open set after the exercise ticked last, so a skipped
+// exercise does not pull them back. Inside a superset that is the member the round has not reached yet.
+export function currentSpot(session) {
+  const entries = session?.entries || [];
+  const lastDone = (entry) => entry.sets.findLastIndex((set) => set.done);
+  const openSet = (entry) => entry.sets.findIndex((set, i) => !set.done && i > lastDone(entry));
+  let anchor = -1;
+  entries.forEach((entry, i) => {
+    if (lastDone(entry) < 0) return;
+    if (anchor < 0 || (entry.lastSetAt || '') >= (entries[anchor].lastSetAt || '')) anchor = i;
+  });
+  if (anchor < 0) return null;
+  const exercises = sessionExercises(session);
+  for (let step = 0; step < entries.length; step++) {
+    const index = (anchor + step) % entries.length;
+    const id = exercises[index]?.supersetId;
+    const group = entries
+      .map((_, i) => i)
+      .filter((i) => (id ? exercises[i]?.supersetId === id : i === index));
+    const open = group.filter((i) => openSet(entries[i]) >= 0);
+    if (!open.length) continue;
+    const doneIn = (i) => entries[i].sets.filter((set) => set.done).length;
+    const exercise = open.reduce((best, i) => (doneIn(i) < doneIn(best) ? i : best));
+    return { exercise, set: openSet(entries[exercise]) };
+  }
+  return { exercise: anchor, set: lastDone(entries[anchor]) };
 }
 // The set that comes next for an exercise: the first open working set, or a new one when all are done.
 export function nextOpenSet(session, exerciseIndex) {
@@ -488,6 +516,7 @@ export function finishSession(running) {
   delete session.begun;
   delete session.lastSetAt;
   delete session.lastActivityAt;
+  session.entries.forEach((entry) => delete entry.lastSetAt);
   session.totalSets = doneSets(session);
   session.volume = volumeOf(session);
   session.entries.forEach((e) =>

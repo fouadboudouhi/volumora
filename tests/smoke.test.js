@@ -2844,3 +2844,55 @@ test('home: last workout, week dots, exercise preview; progress: tabs, last-week
   assert.match(await page.textContent('.chart-section'), /letzte Woche/);
   assert.match(await page.textContent('.weekly-sets'), /Brust/);
 });
+
+test('coming back to a running workout lands on the next open set', async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click('[data-start]');
+  await page.waitForSelector('.workout-exercise');
+  assert.equal(await page.evaluate(() => scrollY), 0, 'a fresh workout starts at the top');
+  const tick = async (exercise, set) => {
+    await page.fill(`[data-set-field="weight"][data-exercise="${exercise}"][data-index="${set}"]`, '50');
+    await page.fill(`[data-set-field="reps"][data-exercise="${exercise}"][data-index="${set}"]`, '10');
+    await page.click(`[data-set-done="${set}"][data-exercise="${exercise}"]`);
+  };
+  const sets = await page.locator('#exercise-2 .set-row').count();
+  assert.equal(sets > 1, true);
+  await tick(2, 0);
+  const spot = () =>
+    page.evaluate(() => {
+      const header = document.querySelector('.workout-top').getBoundingClientRect().bottom;
+      const top = document.querySelector('#exercise-2').getBoundingClientRect().top;
+      const row = document.querySelector('#exercise-2 [data-set="1"]').getBoundingClientRect();
+      const timer = document.querySelector('#restTimer.show')?.getBoundingClientRect().top ?? innerHeight;
+      return {
+        offset: top - header,
+        rowVisible: row.top >= header && row.bottom <= timer,
+        timerOnScreen: timer < innerHeight,
+        y: scrollY,
+      };
+    });
+  const check = async (label) => {
+    await page.waitForFunction(() => scrollY > 0);
+    const { offset, rowVisible, timerOnScreen } = await spot();
+    assert.equal(timerOnScreen, true, `${label}: the running rest timer stays on the screen`);
+    assert.equal(Math.abs(offset) <= 1, true, `${label}: the exercise sits under the header (${offset})`);
+    assert.equal(rowVisible, true, `${label}: the open set is in view`);
+  };
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.click('#exitWorkout');
+  await page.click('.resume-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await check('from home');
+  // A slow phone: the page finishes loading well after the first frame.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await page.reload();
+  await page.waitForSelector('.workout-exercise');
+  await page.waitForTimeout(500);
+  await check('after closing the app');
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  // Ticking inside the workout leaves the page where it is.
+  const before = (await spot()).y;
+  await tick(2, 1);
+  assert.equal(Math.abs((await spot()).y - before) <= 1, true, 'a tick does not jump');
+});

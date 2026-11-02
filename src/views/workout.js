@@ -24,6 +24,7 @@ import {
   activeSession,
   addSessionExercise,
   carryFromSet,
+  currentSpot,
   entryComplete,
   entryTrackType,
   finishCounts,
@@ -35,10 +36,10 @@ import {
   newSet,
   nextOpenSet,
   previousWork,
-  repsStart,
   removeSessionExercise,
-  repsAtPercent,
   replaceSessionExercise,
+  repsAtPercent,
+  repsStart,
   resetWorkoutUi,
   restoreSessionExercise,
   sessionExercises,
@@ -344,6 +345,22 @@ function dictateSet(exerciseIndex) {
       if (!done?.done) toast(t('workout.enterValues'));
     },
   });
+}
+
+// Coming back to a running workout lands on the next open set: its exercise under the header, the set in view.
+export function scrollToCurrent(fallback) {
+  const spot = currentSpot(current());
+  const section = spot && document.getElementById(`exercise-${spot.exercise}`);
+  if (!section) return fallback();
+  // No entrance animation: it would falsify the measurement, and its leftover transform pins the fixed rest
+  // timer to the end of the page instead of the screen.
+  section.closest('main').classList.remove('view-enter', 'view-modal', 'view-push', 'view-pop', 'view-fade');
+  section.style.scrollMarginTop = `${document.querySelector('.workout-top')?.offsetHeight || 0}px`;
+  section.scrollIntoView({ block: 'start', behavior: 'instant' });
+  section
+    .querySelector(`[data-set="${spot.set}"]`)
+    ?.closest('.set-row')
+    ?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
 }
 
 export function bind() {
