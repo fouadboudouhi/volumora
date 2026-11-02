@@ -190,6 +190,8 @@ test('a hostile backup is sanitised on import', async () => {
   await page.click('.sheet [data-ok]');
   await page.waitForSelector('.home-intro');
   for (const view of ['plans', 'analytics', 'calendar', 'more', 'body', 'more', 'settings']) {
+    // The calendar is reached from the Trainings tab.
+    if (view === 'calendar') await page.click('[data-analytics-tab="sessions"]');
     await page.click(`[data-nav="${view}"]`);
     await page.waitForTimeout(50);
   }
@@ -859,6 +861,7 @@ test('finishing a workout shows the summary with records and sharing; the record
   await page.click('#summaryDone');
   await page.waitForSelector('.next-card');
   await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="strength"]');
   await page.click('[data-nav="records"]');
   await page.waitForSelector('[data-record]');
   assert.match(await page.textContent('[data-record]'), /Brustpresse/);
@@ -1057,8 +1060,8 @@ test('analytics: sets per week with a four-week toggle, weekly charts and the re
   assert.match(await page.textContent('.weekly-sets .bar-row b'), /0,5/);
   assert.ok(await page.locator('#weeklyVolumeChart').evaluate((c) => c.width > 0));
   assert.ok(await page.locator('#frequencyChart').evaluate((c) => c.width > 0));
-  await page.click('[data-range="all"]');
   await page.click('[data-analytics-tab="sessions"]');
+  await page.click('[data-range="all"]');
   await page.waitForSelector('[data-session-record] .chip-green');
   assert.match(await page.textContent('[data-session-record] .chip-green'), /Bestwert/);
 });
@@ -1143,8 +1146,8 @@ test('a Hevy export merges into the history and unknown exercises become custom 
   );
   await page.click('[data-nav="analytics"]');
   // The fixture is from 2024: widen the range to everything.
-  await page.click('[data-range="all"]');
   await page.click('[data-analytics-tab="sessions"]');
+  await page.click('[data-range="all"]');
   await page.waitForSelector('[data-session]');
   assert.equal(await page.locator('[data-session]').count(), 2);
   assert.match(await page.textContent('main'), /Push Day/);
@@ -2417,7 +2420,6 @@ test('progress lists exercises and muscle groups side by side, and a tap opens t
   await seedHistory();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.click('[data-nav="analytics"]');
-  await page.click('[data-range="all"]');
   await page.click('[data-analytics-tab="strength"]');
   await page.waitForSelector('.trend-row');
   assert.equal(await page.locator('#analyticsExercise').count(), 0);

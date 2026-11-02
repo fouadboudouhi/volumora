@@ -33,14 +33,7 @@ export function view() {
       return `<button type="button" class="calendar-day completed ${key === todayKey ? 'today' : ''}" data-sessions="${esc(done.map((s) => s.id).join(' '))}" aria-label="${esc(t('calendar.open', { day: d.getDate() }))}"><span>${d.getDate()}</span><b>${esc(done[0].dayName || t('session.title'))}</b></button>`;
     return `<div class="calendar-day ${key === todayKey ? 'today' : ''}"><span>${d.getDate()}</span></div>`;
   });
-  const upcoming =
-    plan?.days
-      ?.map(
-        (d, i) =>
-          `<div><span>${i + 1}</span><b>${esc(d.name)}</b><small>${plural(d.exercises.length, 'exercises')}</small></div>`
-      )
-      .join('') || '';
-  return `<main class="shell calendar-shell">${parentRow('analytics')}<section class="calendar-head"><h1>${fmtMonth(first)}</h1><div class="calendar-nav"><button class="icon-btn" data-calendar-shift="-1" aria-label="${t('calendar.prev')}">${icon('chevron-left')}</button>${offsetMonths ? `<button class="icon-btn" data-calendar-shift="0">${t('calendar.today')}</button>` : ''}<button class="icon-btn" data-calendar-shift="1" aria-label="${t('calendar.next')}">${icon('chevron-right')}</button></div></section><div class="calendar-weekdays">${[0, 1, 2, 3, 4, 5, 6].map((x) => `<span>${weekdayShort(x)}</span>`).join('')}</div><section class="calendar-grid">${cells.join('')}</section><section class="calendar-plan"><div class="section-title"><h2>${t('calendar.rhythm')}</h2><small>${plan ? plural(plan.days.length, 'trainingDays') : ''}</small></div>${upcoming || empty(t('calendar.noPlanTitle'), t('calendar.noPlanText'), { label: t('calendar.emptyAction'), attrs: 'data-nav="templates"' })}</section></main>`;
+  return `<main class="shell calendar-shell">${parentRow('analytics')}<section class="calendar-head"><h1>${fmtMonth(first)}</h1><div class="calendar-nav"><button class="icon-btn" data-calendar-shift="-1" aria-label="${t('calendar.prev')}">${icon('chevron-left')}</button>${offsetMonths ? `<button class="icon-btn" data-calendar-shift="0">${t('calendar.today')}</button>` : ''}<button class="icon-btn" data-calendar-shift="1" aria-label="${t('calendar.next')}">${icon('chevron-right')}</button></div></section><div class="calendar-weekdays">${[0, 1, 2, 3, 4, 5, 6].map((x) => `<span>${weekdayShort(x)}</span>`).join('')}</div><section class="calendar-grid">${cells.join('')}</section></main>`;
 }
 
 export function bind() {
