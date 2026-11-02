@@ -1590,7 +1590,7 @@ test('chat history keeps text and what was done, and answer buttons come off the
     '<p>Dein Plan:</p>' +
       '<section class="chat-card"><h3>Tag 1 · &lt;Oben&gt;</h3>' +
       '<div class="chat-row"><span>Übung A</span><b>3×8–12</b></div>' +
-      '<div class="chat-row"><span>Übung B<small>3 Min. Pause</small></span><b>3×6–10</b></div></section>' +
+      '<div class="chat-row"><span>Übung B</span><b>3×6–10</b><small>3 Min. Pause</small></div></section>' +
       '<section class="chat-card"><h3>Tag 2</h3><div class="chat-row"><span>Übung C</span><b>3×8–12</b></div></section>' +
       '<p>Passt das?</p>'
   );
@@ -2007,6 +2007,17 @@ test('currentSpot finds the next open set after the exercise ticked last', async
     { exercise: 0, set: 1 },
     'a workout from before this field still resolves'
   );
+});
+
+test('the default plan and the catalogue share one history for the same exercise', async () => {
+  const { exerciseKey } = await import('../src/util.js');
+  const { exerciseName, libraryOf } = await import('../src/library.js');
+  assert.equal(exerciseKey({ libraryId: '0577' }), exerciseKey({ libraryId: 'chest-press' }));
+  assert.equal(exerciseKey({ id: '0313' }), exerciseKey({ id: 'hammer-curl' }));
+  assert.notEqual(exerciseKey({ id: '1299' }), exerciseKey({ id: 'chest-press' }), 'others stay apart');
+  assert.equal(libraryOf({ libraryId: '0577' }).id, '0577', 'each keeps its own record');
+  assert.equal(libraryOf({ libraryId: 'chest-press' }).id, 'chest-press');
+  assert.ok(exerciseName({ libraryId: '0577' }));
 });
 
 test('the server updates itself only after green CI, and goes back when the new version does not come up', async () => {

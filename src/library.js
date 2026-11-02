@@ -2,7 +2,7 @@
 // Muscle groups, equipment and target muscles are stored as dataset keys; labels come from the dictionary.
 import { EXERCISES } from '../assets/data/exercises.js';
 import { t } from './i18n.js';
-import { exerciseKey, titleCase } from './util.js';
+import { exerciseSourceId, titleCase } from './util.js';
 
 const DEMOS = {
   chest: 'https://static.exercisedb.dev/media/DOoWcnA.gif',
@@ -190,7 +190,7 @@ export function alternativesFor(item, { equipment = [], limit = 5 } = {}) {
 
 // The record behind a plan exercise, session entry or picker item: built-in, catalogue or custom; null otherwise.
 export const libraryOf = (item) => {
-  const key = exerciseKey(item);
+  const key = exerciseSourceId(item);
   return BUILT_IN[key] || BY_ID.get(key) || customExercise(key) || null;
 };
 

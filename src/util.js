@@ -52,7 +52,13 @@ export const fold = (value) =>
     .replace(/ae|oe|ue/g, (m) => m[0]);
 
 // Exercises are matched across plans and sessions by their library id; custom exercises fall back to their own id.
-export const exerciseKey = (item) => item?.libraryId || item?.exerciseId || item?.id || '';
+export const exerciseSourceId = (item) => item?.libraryId || item?.exerciseId || item?.id || '';
+// The default plan has its own entries for these catalogue exercises. Same exercise, so one history and one record.
+const SAME_EXERCISE = { '0577': 'chest-press', '0313': 'hammer-curl' };
+export const exerciseKey = (item) => {
+  const id = exerciseSourceId(item);
+  return SAME_EXERCISE[id] || id;
+};
 
 export const weekdayIndex = (date) => (date.getDay() + 6) % 7;
 
