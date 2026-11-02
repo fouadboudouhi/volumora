@@ -571,18 +571,14 @@ test('weekly stats: sets per group, weekly volume, frequency, record timeline, b
     ],
   });
   const history = [session('a', thisWeek, 60, true), session('b', lastWeek, 50), session('c', lastWeek, 50)];
-  // The bench press works triceps and shoulders on the side: those count half.
-  assert.deepEqual(weeklySets(history, { weeks: 1, today }), [
+  assert.deepEqual(weeklySets(history, { weeks: 1, today }), [{ group: 'chest', sets: 2 }]);
+  assert.deepEqual(weeklySets(history, { weeks: 4, today }), [{ group: 'chest', sets: 1.5 }]);
+  // On request the groups that only help get a share: triceps and shoulders on the bench press.
+  assert.deepEqual(weeklySets(history, { weeks: 1, today, helping: 0.5 }), [
     { group: 'chest', sets: 2 },
     { group: 'arms', sets: 1 },
     { group: 'shoulders', sets: 1 },
   ]);
-  assert.deepEqual(weeklySets(history, { weeks: 4, today }), [
-    { group: 'chest', sets: 1.5 },
-    { group: 'arms', sets: 0.8 },
-    { group: 'shoulders', sets: 0.8 },
-  ]);
-  assert.deepEqual(weeklySets(history, { weeks: 1, today, helping: 0 }), [{ group: 'chest', sets: 2 }]);
   const volume = weeklyVolume(history, 3, today);
   assert.equal(volume.length, 3);
   assert.deepEqual(

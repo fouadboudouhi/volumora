@@ -300,7 +300,7 @@ const ui = {
   'analytics.thisWeek': 'This week',
   'analytics.fourWeekAvg': '4-week average',
   'analytics.setsTarget':
-    'The marks show the guideline: 10 to 20 sets per muscle group and week. Helping muscles count half, such as the biceps on a row.',
+    'The marks show the guideline: 10 to 20 sets per muscle group and week. Each set counts for the main muscle of the exercise.',
   'analytics.noWeeklySets': 'No sets in this period yet.',
   'analytics.weeklyVolume': 'Weekly volume',
   'analytics.weeklyVolumeAria': 'Training volume per week, last twelve weeks',

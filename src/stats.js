@@ -76,9 +76,9 @@ function setsByGroupOf(entry, helping) {
   return [[groupOf(entry), sets], ...(helping ? helpingGroups(entry).map((g) => [g, sets * helping]) : [])];
 }
 
-// Working sets per muscle group over the last `weeks` calendar weeks (the current one included), per week. Sets of
-// an exercise count half for the groups that only help, the usual way of counting.
-export function weeklySets(history, { weeks = 1, today = new Date(), helping = 0.5 } = {}) {
+// Working sets per muscle group over the last `weeks` calendar weeks (the current one included), per week. A set
+// counts for the muscle the exercise is for, the way most apps count; `helping` can credit the groups that only help.
+export function weeklySets(history, { weeks = 1, today = new Date(), helping = 0 } = {}) {
   const from = startOfWeek(today);
   from.setDate(from.getDate() - 7 * (weeks - 1));
   const fromKey = dayKey(from);
@@ -118,7 +118,7 @@ export const frequency = (history, weeks = 12, today = new Date()) => perWeek(hi
 export const groupSetsPerWeek = (history, group, weeks = 12, today = new Date()) =>
   perWeek(history, weeks, today, (h) =>
     (h.entries || []).reduce(
-      (n, e) => n + setsByGroupOf(e, 0.5).reduce((m, [g, sets]) => (g === group ? m + sets : m), 0),
+      (n, e) => n + setsByGroupOf(e, 0).reduce((m, [g, sets]) => (g === group ? m + sets : m), 0),
       0
     )
   );

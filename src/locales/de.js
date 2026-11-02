@@ -303,7 +303,7 @@ const ui = {
   'analytics.thisWeek': 'Diese Woche',
   'analytics.fourWeekAvg': '4-Wochen-Schnitt',
   'analytics.setsTarget':
-    'Die Striche zeigen den Richtwert: 10 bis 20 Sätze pro Muskelgruppe und Woche. Nebenmuskeln zählen halb, etwa der Bizeps beim Rudern.',
+    'Die Striche zeigen den Richtwert: 10 bis 20 Sätze pro Muskelgruppe und Woche. Jeder Satz zählt beim Hauptmuskel der Übung.',
   'analytics.noWeeklySets': 'Noch keine Sätze in diesem Zeitraum.',
   'analytics.weeklyVolume': 'Wochenvolumen',
   'analytics.weeklyVolumeAria': 'Trainingsvolumen pro Woche, letzte zwölf Wochen',
