@@ -2815,6 +2815,10 @@ test('home: last workout, week dots, exercise preview; progress: tabs, last-week
     groups.some((g) => /^Brust 2$/.test(g)),
     groups.join(', ')
   );
+  assert.ok(
+    groups.some((g) => /^Arme 1$/.test(g)),
+    'helping muscles count half: ' + groups.join(', ')
+  );
   assert.match(await page.textContent('.chart-section'), /Nebenmuskeln zählen halb/);
   await page.click('[data-analytics-tab="strength"]');
   await page.waitForSelector('.trend-row');

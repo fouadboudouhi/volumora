@@ -68,7 +68,8 @@ export const LEGACY_EQUIPMENT = {
 };
 
 // The 16 exercises of the built-in plan keep their slug ids forever: history entries point at them.
-const builtIn = (id, category, equipment, target, gif) => [
+// Muscles that help, named the way the catalogue names them, so sets count half for their groups.
+const builtIn = (id, category, equipment, target, gif, secondary = []) => [
   id,
   {
     id,
@@ -78,26 +79,33 @@ const builtIn = (id, category, equipment, target, gif) => [
     target,
     gif,
     group: groupOfBodyPart(category),
+    secondary,
     builtIn: true,
   },
 ];
 export const BUILT_IN = Object.fromEntries([
-  builtIn('chest-press', 'chest', 'leverage machine', 'pectorals', DEMOS.chest),
-  builtIn('incline-chest-press', 'chest', 'leverage machine', 'pectorals', DEMOS.incline),
+  builtIn('chest-press', 'chest', 'leverage machine', 'pectorals', DEMOS.chest, ['triceps', 'shoulders']),
+  builtIn('incline-chest-press', 'chest', 'leverage machine', 'pectorals', DEMOS.incline, [
+    'triceps',
+    'shoulders',
+  ]),
   builtIn('triceps-pushdown', 'upper arms', 'cable', 'triceps', DEMOS.pushdown),
-  builtIn('cable-external-rotation', 'shoulders', 'cable', 'delts', DEMOS.rotation),
-  builtIn('scaption-raise', 'shoulders', 'dumbbell', 'delts', DEMOS.scaption),
-  builtIn('lat-pulldown-neutral', 'back', 'cable', 'lats', DEMOS.lat),
-  builtIn('seated-cable-row', 'back', 'cable', 'upper back', DEMOS.row),
-  builtIn('high-row-machine', 'back', 'leverage machine', 'upper back', DEMOS.highrow),
-  builtIn('ez-bar-curl', 'upper arms', 'ez barbell', 'biceps', DEMOS.curl),
-  builtIn('hammer-curl', 'upper arms', 'dumbbell', 'biceps', DEMOS.hammer),
-  builtIn('squat', 'upper legs', 'barbell', 'quads', DEMOS.squat),
-  builtIn('romanian-deadlift', 'upper legs', 'barbell', 'hamstrings', DEMOS.rdl),
-  builtIn('leg-curl', 'upper legs', 'leverage machine', 'hamstrings', DEMOS.legcurl),
+  builtIn('cable-external-rotation', 'shoulders', 'cable', 'delts', DEMOS.rotation, ['rotator cuff']),
+  builtIn('scaption-raise', 'shoulders', 'dumbbell', 'delts', DEMOS.scaption, ['traps']),
+  builtIn('lat-pulldown-neutral', 'back', 'cable', 'lats', DEMOS.lat, ['biceps', 'forearms']),
+  builtIn('seated-cable-row', 'back', 'cable', 'upper back', DEMOS.row, ['biceps', 'rear deltoids']),
+  builtIn('high-row-machine', 'back', 'leverage machine', 'upper back', DEMOS.highrow, [
+    'biceps',
+    'rear deltoids',
+  ]),
+  builtIn('ez-bar-curl', 'upper arms', 'ez barbell', 'biceps', DEMOS.curl, ['forearms']),
+  builtIn('hammer-curl', 'upper arms', 'dumbbell', 'biceps', DEMOS.hammer, ['forearms']),
+  builtIn('squat', 'upper legs', 'barbell', 'quads', DEMOS.squat, ['glutes', 'hamstrings', 'core']),
+  builtIn('romanian-deadlift', 'upper legs', 'barbell', 'hamstrings', DEMOS.rdl, ['glutes', 'lower back']),
+  builtIn('leg-curl', 'upper legs', 'leverage machine', 'hamstrings', DEMOS.legcurl, ['calves']),
   builtIn('leg-extension', 'upper legs', 'leverage machine', 'quads', DEMOS.extension),
   builtIn('calf-raise', 'lower legs', 'leverage machine', 'calves', DEMOS.calf),
-  builtIn('leg-raise', 'waist', 'body weight', 'abs', DEMOS.raise),
+  builtIn('leg-raise', 'waist', 'body weight', 'abs', DEMOS.raise, ['hip flexors']),
 ]);
 
 // Exercises whose tracking differs from what category and equipment suggest: holds are timed, and a few
