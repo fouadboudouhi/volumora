@@ -2790,7 +2790,7 @@ test('review fixes: the KI tab survives a failed upload, short workouts show no 
   assert.ok(count > 0 && count < 50, `matches counted: ${count}`);
 });
 
-test('home: last workout, week dots, exercise preview; progress: tabs, last-week fallback, helping muscles count half', async () => {
+test('home: last workout, week dots, exercise preview; progress: tabs, last-week fallback, main-muscle sets', async () => {
   await seedHistory();
   await page.setViewportSize({ width: 390, height: 844 });
   // Home
@@ -2818,10 +2818,10 @@ test('home: last workout, week dots, exercise preview; progress: tabs, last-week
     groups.join(', ')
   );
   assert.ok(
-    groups.some((g) => /^Arme 1$/.test(g)),
-    'helping muscles count half: ' + groups.join(', ')
+    !groups.some((g) => /^Arme/.test(g)),
+    'sets count for the main muscle only: ' + groups.join(', ')
   );
-  assert.match(await page.textContent('.chart-section'), /Nebenmuskeln zählen halb/);
+  assert.match(await page.textContent('.chart-section'), /beim Hauptmuskel/);
   await page.click('[data-analytics-tab="strength"]');
   await page.waitForSelector('.trend-row');
   await page.click('[data-analytics-tab="sessions"]');
