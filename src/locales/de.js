@@ -326,14 +326,12 @@ const ui = {
   'calendar.prev': 'Vorheriger Monat',
   'calendar.next': 'Nächster Monat',
   'calendar.today': 'Heute',
-  'calendar.rhythm': 'Deine Trainingstage',
   'calendar.noPlanTitle': 'Noch kein Plan',
   'calendar.noPlanText': 'Erstelle zuerst einen Trainingsplan.',
 
   // Body
   'body.title': 'Körper',
   'body.photoAlt': 'Fortschritt vom {date}',
-  'body.noPhoto': 'Kein Foto',
   'body.waist': 'Taille',
   'body.chest': 'Brust',
   'body.arm': 'Arm',
@@ -579,6 +577,9 @@ const ui = {
   'analytics.tab.strength': 'Kraft',
   'analytics.tab.sessions': 'Trainings',
   'analytics.lastWeekShown': 'Diese Woche noch nichts, darum die letzte Woche:',
+  'analytics.recordsHint': 'Deine besten Sätze je Übung',
+  'analytics.calendarHint': 'Trainingstage im Monat',
+  'history.noneInRange': 'Keine Trainings in diesem Zeitraum.',
   'summary.title': 'Training abgeschlossen',
   'calories.value': 'ca. {n} kcal',
   'calories.tiny': 'Zu kurz für eine Kalorienschätzung.',
@@ -1140,7 +1141,6 @@ export default {
   // Look (October 2026): set captions, last-session hint, week line
   'workout.weight': 'Gewicht',
   'workout.distance': 'Distanz',
-  'workout.last': 'zuletzt {set}',
   'home.thisWeek': 'Diese Woche',
   'home.kpiVolume': 'Volumen',
   'home.kpiRecords': 'Bestwerte',

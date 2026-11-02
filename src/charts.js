@@ -243,13 +243,14 @@ export function drawAnalytics(selectedKey, range) {
     })),
     { suffix: ` ${unit()}` }
   );
-  const { points: strength, suffix } = strengthSeries(history, selectedKey);
+  const everything = getHistory().slice().reverse();
+  const { points: strength, suffix } = strengthSeries(everything, selectedKey);
   lineChart(document.querySelector('#strengthChart'), strength.slice(-16), {
     color: token('--orange'),
     suffix,
   });
   // Body weight next to the strength of the selected exercise, both in the display unit.
-  const combo = strengthVsBodyweight(historyInRange(range), bodyInRange(range), selectedKey);
+  const combo = strengthVsBodyweight(getHistory(), getBody(), selectedKey);
   const comboReady = combo.points.length >= 2;
   document.querySelector('#bodyStrengthChart')?.toggleAttribute('hidden', !comboReady);
   document.querySelector('#bodyStrengthHint')?.toggleAttribute('hidden', !comboReady);

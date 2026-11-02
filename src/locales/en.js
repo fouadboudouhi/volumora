@@ -323,14 +323,12 @@ const ui = {
   'calendar.prev': 'Previous month',
   'calendar.next': 'Next month',
   'calendar.today': 'Today',
-  'calendar.rhythm': 'Your training days',
   'calendar.noPlanTitle': 'No plan yet',
   'calendar.noPlanText': 'Create a training plan first.',
 
   // Body
   'body.title': 'Body',
   'body.photoAlt': 'Progress on {date}',
-  'body.noPhoto': 'No photo',
   'body.waist': 'Waist',
   'body.chest': 'Chest',
   'body.arm': 'Arm',
@@ -585,6 +583,9 @@ const ui = {
   'analytics.tab.strength': 'Strength',
   'analytics.tab.sessions': 'Workouts',
   'analytics.lastWeekShown': 'Nothing this week yet, so here is last week:',
+  'analytics.recordsHint': 'Your best sets per exercise',
+  'analytics.calendarHint': 'Training days by month',
+  'history.noneInRange': 'No workouts in this period.',
   'summary.title': 'Workout finished',
   'summary.newRecords': 'New records',
   'summary.noRecords': 'No new records this time.',
@@ -1123,7 +1124,6 @@ export default {
   // Look (October 2026): set captions, last-session hint, week line
   'workout.weight': 'Weight',
   'workout.distance': 'Distance',
-  'workout.last': 'last {set}',
   'home.thisWeek': 'This week',
   'home.kpiVolume': 'Volume',
   'home.kpiRecords': 'Records',

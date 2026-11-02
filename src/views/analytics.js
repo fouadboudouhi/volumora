@@ -112,7 +112,7 @@ function groupRows() {
     return trendRow({
       attrs: `data-trend-group="${esc(group)}"`,
       name: groupLabel(group),
-      value: t('analytics.setsPerWeekValue', { n: fmtNumber(values.at(-1) || 0) }),
+      value: t('analytics.setsPerWeekValue', { n: fmtNumber(values.at(-1) || values.at(-2) || 0) }),
       values,
       open: group === state.analyticsGroup,
       detail: `<canvas id="groupChart" height="180" role="img" aria-label="${esc(t('analytics.groupChartAria', { group: groupLabel(group) }))}"></canvas>`,
@@ -142,8 +142,9 @@ function timelineSection(history) {
 export function view() {
   const range = state.analyticsRange || '3m';
   const history = historyInRange(range);
+  const all = getHistory();
   const exercises = new Map();
-  history.forEach((h) =>
+  all.forEach((h) =>
     h.entries?.forEach((e) => {
       if (!exercises.has(exerciseKey(e))) exercises.set(exerciseKey(e), exerciseName(e));
     })
@@ -151,7 +152,7 @@ export function view() {
   if (!exercises.has(state.analyticsExercise))
     state.analyticsExercise = exercises.keys().next().value || null;
   const selected = state.analyticsExercise;
-  const totalVolume = history.reduce((s, h) => s + (h.volume || volumeOf(h)), 0);
+  const totalVolume = all.reduce((s, h) => s + (h.volume || volumeOf(h)), 0);
   const hasBody = getBody().some((b) => number(b.weight));
   const rangeControl = `<div class="segmented" role="group" aria-label="${t('range.aria')}">${RANGES.map((key) => `<button type="button" class="${key === range ? 'active' : ''}" data-range="${key}" aria-pressed="${key === range}">${t(`range.${key}`)}</button>`).join('')}</div>`;
   const rows = history
@@ -160,25 +161,31 @@ export function view() {
         `<button type="button" class="row" data-session="${esc(h.id)}"><span class="row-main"><b>${esc(h.dayName || h.day)}</b><small>${fmtLong(h.day || h.finishedAt)}${markerText(h) ? ` · ${markerText(h)}` : ''}</small></span><span class="row-value"><b>${fmtVolume(h.volume || volumeOf(h))}</b><small>${plural(number(h.totalSets), 'sets')}</small></span>${icon('chevron-right')}</button>`
     )
     .join('');
-  const head = `<section class="page-head"><h1>${t('history.title')}</h1><div class="page-actions"><button class="text-btn" data-nav="records">${t('history.records')}</button><button class="text-btn" data-nav="calendar">${t('history.calendar')}</button></div></section>`;
-  if (!history.length) {
-    return `<main class="shell">${head}${rangeControl}${empty(t('history.emptyTitle'), t('history.emptyText'), { label: t('history.emptyAction'), attrs: 'data-nav="home"' })}</main>`;
+  const head = `<section class="page-head"><h1>${t('history.title')}</h1></section>`;
+  const link = (target, ic, title, hint) =>
+    `<section class="list-section"><div class="list"><button type="button" class="row" data-nav="${target}"><span class="row-icon">${icon(ic)}</span><span class="row-main"><b>${title}</b><small>${hint}</small></span>${icon('chevron-right')}</button></div></section>`;
+  const recordsLink = link('records', 'trophy', t('history.records'), t('analytics.recordsHint'));
+  const calendarLink = link('calendar', 'calendar', t('history.calendar'), t('analytics.calendarHint'));
+  if (!all.length) {
+    return `<main class="shell">${head}${recordsLink}${calendarLink}${empty(t('history.emptyTitle'), t('history.emptyText'), { label: t('history.emptyAction'), attrs: 'data-nav="home"' })}</main>`;
   }
   const tab = TABS.includes(state.analyticsTab) ? state.analyticsTab : 'overview';
   const tabs = `<div class="segmented analytics-tabs" role="tablist" aria-label="${t('history.title')}">${TABS.map((key) => `<button type="button" role="tab" class="${key === tab ? 'active' : ''}" data-analytics-tab="${key}" aria-selected="${key === tab}">${t(`analytics.tab.${key}`)}</button>`).join('')}</div>`;
   const sections = {
-    overview: `<div class="stat-row"><div><b>${history.length}</b><span>${t('history.sessions')}</span></div><div><b>${fmtNumber(Math.round(toDisplay(totalVolume)))}</b><span>${t('history.volume', { unit: unit() })}</span></div><div><b>${history.reduce((n, h) => n + number(h.totalSets), 0)}</b><span>${t('history.sets')}</span></div></div>
+    overview: `<div class="stat-row"><div><b>${all.length}</b><span>${t('history.sessions')}</span></div><div><b>${fmtNumber(Math.round(toDisplay(totalVolume)))}</b><span>${t('history.volume', { unit: unit() })}</span></div><div><b>${all.reduce((n, h) => n + number(h.totalSets), 0)}</b><span>${t('history.sets')}</span></div></div>
     ${weeklySetsSection()}
     <section class="chart-section"><h2>${t('analytics.weeklyVolume')}</h2><canvas id="weeklyVolumeChart" height="180" role="img" aria-label="${t('analytics.weeklyVolumeAria')}"></canvas></section>
     <section class="chart-section"><h2>${t('analytics.frequency')}</h2><canvas id="frequencyChart" height="160" role="img" aria-label="${t('analytics.frequencyAria')}"></canvas></section>`,
-    strength: `${trendSection(history, exercises, selected)}
+    strength: `${recordsLink}
+    ${trendSection(all, exercises, selected)}
     ${hasBody ? `<section class="chart-section"><h2>${esc(t('analytics.bodyStrengthOf', { name: exercises.get(selected) || '' }))}</h2><canvas id="bodyStrengthChart" height="200" role="img" aria-label="${t('analytics.bodyStrengthAria')}"></canvas><p class="muted analytics-hint" id="bodyStrengthHint">${t('analytics.bodyStrengthHint')}</p><p class="muted analytics-hint" id="bodyStrengthEmpty" hidden>${t('analytics.bodyStrengthEmpty')}</p></section>` : ''}`,
-    sessions: `<section class="chart-section"><h2>${t('history.volumeChart')}</h2><canvas id="volumeChart" height="200" role="img" aria-label="${t('history.volumeChartAria')}"></canvas></section>
+    sessions: `${rangeControl}
+    ${calendarLink}
+    <section class="chart-section"><h2>${t('history.volumeChart')}</h2><canvas id="volumeChart" height="200" role="img" aria-label="${t('history.volumeChartAria')}"></canvas></section>
     ${timelineSection(history)}
-    <section class="list-section"><h2>${t('history.sessions')}</h2><div class="list">${rows}</div></section>`,
+    <section class="list-section"><h2>${t('history.sessions')}</h2>${rows ? `<div class="list">${rows}</div>` : `<p class="muted">${t('history.noneInRange')}</p>`}</section>`,
   };
   return `<main class="shell">${head}
-    ${rangeControl}
     ${tabs}
     ${sections[tab]}</main>`;
 }

@@ -116,15 +116,10 @@ function exerciseSection(ex, index, entry, exercises, letters, showRir) {
       ? `<img class="exercise-gif" src="${esc(ex.gif)}" alt="" loading="lazy" decoding="async">`
       : icon('dumbbell')
   }</button>`;
-  const best = prevSets.reduce(
-    (top, s) => (!top || setScore(s, trackType) > setScore(top, trackType) ? s : top),
-    null
-  );
-  const last = best ? ` · ${esc(t('workout.last', { set: describeSet(best, trackType) }))}` : '';
   const work = workSets(entry);
   const done = work.filter((s) => s.done).length;
   return `<section class="workout-exercise ${complete ? 'complete' : ''} ${position === 'single' ? '' : `superset-${position}`}" id="exercise-${index}">
-      <div class="workout-exercise-head">${tile}<div><h2><button type="button" class="exercise-title" data-exercise-history="${index}" aria-label="${esc(t('workout.historyOf', { name }))}">${esc(name)}${icon('chevron-right')}</button></h2><p>${work.length} × ${esc(ex.range)}${last}${ex.note && !ex.gif ? ` · ${esc(ex.note)}` : ''}${superset}</p></div><span class="exercise-count ${complete ? 'complete' : ''}">${complete ? icon('check') : `${done}/${work.length}`}</span></div>
+      <div class="workout-exercise-head">${tile}<div><h2><button type="button" class="exercise-title" data-exercise-history="${index}" aria-label="${esc(t('workout.historyOf', { name }))}">${esc(name)}${icon('chevron-right')}</button></h2><p>${work.length} × ${esc(ex.range)}${ex.note && !ex.gif ? ` · ${esc(ex.note)}` : ''}${superset}</p></div><span class="exercise-count ${complete ? 'complete' : ''}">${complete ? icon('check') : `${done}/${work.length}`}</span></div>
       ${suggest.weight ? suggestionRow(suggest, entry, index) : ''}
       <div class="set-table ${showRir ? '' : 'no-rir'}">${setHead(trackType, showRir)}<div class="set-list">${rows}</div></div>
       <div class="exercise-tools"><button class="text-btn" data-add-set="${index}">${t('workout.addSet')}</button><button class="icon-btn quiet exercise-mic" data-dictate="${index}" aria-label="${esc(t('dictate.open', { name }))}">${icon('mic')}</button><button class="icon-btn quiet" data-exercise-menu="${index}" aria-label="${esc(t('exercise.more', { name }))}">${icon('more')}</button></div>
