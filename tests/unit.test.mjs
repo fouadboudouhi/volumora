@@ -2112,3 +2112,170 @@ esac`
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('sync server: another app has its own data and never reaches the Volumora data', async () => {
+  const { createSyncServer, store } = await import('../sync-server/server.js');
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dataDir = await mkdtemp(join(tmpdir(), 'sync-apps-'));
+  const db = store(dataDir);
+  await db.register('anna', 'langes-passwort', await db.createInvite());
+  const server = createSyncServer({ dataDir, origins: [] });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}/v1`;
+  try {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST',
+      body: JSON.stringify({ username: 'anna', password: 'langes-passwort' }),
+    });
+    const { token } = await login.json();
+    const call = (path, options = {}) =>
+      fetch(`${base}${path}`, {
+        ...options,
+        headers: { authorization: `Bearer ${token}`, ...options.headers },
+      });
+
+    const volumora = await call('/snapshot', { method: 'PUT', body: '{"app":"Volumora"}' });
+    assert.equal(volumora.status, 200);
+    assert.equal((await call('/apps/prepora/snapshot')).status, 404);
+
+    const first = await call('/apps/prepora/snapshot', { method: 'PUT', body: '{"app":"Prepora"}' });
+    assert.equal(first.status, 200);
+    const { version } = await first.json();
+    const stale = await call('/apps/prepora/snapshot', { method: 'PUT', body: '{"app":"Alt"}' });
+    assert.equal(stale.status, 412);
+    const second = await call('/apps/prepora/snapshot', {
+      method: 'PUT',
+      body: '{"app":"Prepora","n":2}',
+      headers: { 'if-match': `"${version}"` },
+    });
+    assert.equal(second.status, 200);
+
+    assert.deepEqual(await (await call('/apps/prepora/snapshot')).json(), { app: 'Prepora', n: 2 });
+    assert.deepEqual(await (await call('/snapshot')).json(), { app: 'Volumora' });
+    assert.equal((await call('/snapshots')).status, 200);
+    assert.equal((await (await call('/snapshots')).json()).snapshots.length, 1);
+    assert.equal((await call('/apps/..%2F..%2Fanna/snapshot')).status, 404);
+    assert.equal((await fetch(`${base}/apps/prepora/snapshot`)).status, 401);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('sync server: a due alarm reaches the browser encrypted, once, and a dead subscription goes away', async () => {
+  const { createSyncServer, store } = await import('../sync-server/server.js');
+  const { createECDH, createDecipheriv, hkdfSync, randomBytes } = await import('node:crypto');
+  const { createServer } = await import('node:http');
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const browser = createECDH('prime256v1');
+  const browserKey = browser.generateKeys();
+  const secret = randomBytes(16);
+  const received = [];
+  let answer = 201;
+  const pushService = createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      received.push({ headers: req.headers, body: Buffer.concat(chunks) });
+      res.writeHead(answer);
+      res.end();
+    });
+  });
+  await new Promise((r) => pushService.listen(0, '127.0.0.1', r));
+  const endpoint = `http://127.0.0.1:${pushService.address().port}/send/abc`;
+
+  const dataDir = await mkdtemp(join(tmpdir(), 'sync-push-'));
+  const db = store(dataDir);
+  await db.register('anna', 'langes-passwort', await db.createInvite());
+  let clock = 1_800_000_000_000;
+  const server = createSyncServer({
+    dataDir,
+    origins: [],
+    now: () => clock,
+    pushAllowed: (url) => url.hostname === '127.0.0.1',
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}/v1`;
+  try {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST',
+      body: JSON.stringify({ username: 'anna', password: 'langes-passwort' }),
+    });
+    const { token } = await login.json();
+    const post = (path, value) =>
+      fetch(`${base}${path}`, {
+        method: 'POST',
+        body: JSON.stringify(value),
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    assert.equal(
+      (await (await fetch(`${base}/push/key`, { headers: { authorization: `Bearer ${token}` } })).json()).key
+        .length,
+      87
+    );
+    assert.equal(
+      (
+        await post('/push/subscribe', {
+          subscription: { endpoint: 'http://example.com/x', keys: { p256dh: 'a', auth: 'b' } },
+        })
+      ).status,
+      400
+    );
+    const subscription = {
+      endpoint,
+      keys: { p256dh: browserKey.toString('base64url'), auth: secret.toString('base64url') },
+    };
+    assert.equal((await post('/push/subscribe', { subscription })).status, 200);
+
+    await post('/push/alarms', {
+      set: [
+        { id: 'reis', at: clock + 1000, title: 'Reis ist fertig', body: 'Vom Herd nehmen' },
+        { id: 'ofen', at: clock + 9000, title: 'Ofen', body: '' },
+        { id: 'weg', at: clock + 500, title: 'Abgesagt', body: '' },
+      ],
+    });
+    await post('/push/alarms', { cancel: ['weg'] });
+    await server.sendDueAlarms();
+    assert.equal(received.length, 0);
+
+    clock += 2000;
+    await server.sendDueAlarms();
+    await server.sendDueAlarms();
+    assert.equal(received.length, 1);
+    const { headers, body } = received[0];
+    assert.equal(headers['content-encoding'], 'aes128gcm');
+    assert.match(headers.authorization, /^vapid t=.+, k=.+$/);
+
+    const salt = body.subarray(0, 16);
+    const idLength = body[20];
+    const serverKey = body.subarray(21, 21 + idLength);
+    const encrypted = body.subarray(21 + idLength);
+    const info = Buffer.concat([Buffer.from('WebPush: info\0'), browserKey, serverKey]);
+    const ikm = Buffer.from(hkdfSync('sha256', browser.computeSecret(serverKey), secret, info, 32));
+    const key = Buffer.from(hkdfSync('sha256', ikm, salt, 'Content-Encoding: aes128gcm\0', 16));
+    const nonce = Buffer.from(hkdfSync('sha256', ikm, salt, 'Content-Encoding: nonce\0', 12));
+    const decipher = createDecipheriv('aes-128-gcm', key, nonce);
+    decipher.setAuthTag(encrypted.subarray(-16));
+    const plain = Buffer.concat([decipher.update(encrypted.subarray(0, -16)), decipher.final()]);
+    assert.equal(plain.at(-1), 2);
+    assert.deepEqual(JSON.parse(plain.subarray(0, -1).toString()), {
+      title: 'Reis ist fertig',
+      body: 'Vom Herd nehmen',
+      id: 'reis',
+    });
+
+    answer = 410;
+    clock += 10000;
+    await server.sendDueAlarms();
+    assert.equal(received.length, 2);
+    assert.deepEqual(await db.pushOf('anna'), { subscriptions: [], alarms: [] });
+  } finally {
+    await new Promise((r) => server.close(r));
+    await new Promise((r) => pushService.close(r));
+  }
+});

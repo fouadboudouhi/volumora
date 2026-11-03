@@ -26,3 +26,7 @@ docker compose exec volumora-sync node admin.js delete-user NAME
 ```
 
 Back up the `data/` folder like any other data. The server can read every account's data, so run it only for people who trust you.
+
+## Other apps and push
+
+`/v1/apps/<name>/snapshot` works like `/v1/snapshot`, in a place of its own, so another app of the same account can never overwrite the Volumora data. `/v1/push/key`, `/v1/push/subscribe` and `/v1/push/alarms` send timed reminders by Web Push; the server makes its key pair on first use and keeps it in `data/push.json`.

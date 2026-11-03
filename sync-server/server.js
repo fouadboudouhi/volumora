@@ -3,7 +3,18 @@
 // not fill the disk. Older versions of each account stay, so a mistake can be undone.
 // The server can also hold one Claude key for everyone: the app then talks to Claude through here, and each account
 // gets a monthly budget in dollars that the admin sets.
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import {
+  createCipheriv,
+  createECDH,
+  createHash,
+  createPrivateKey,
+  generateKeyPairSync,
+  hkdfSync,
+  randomBytes,
+  scryptSync,
+  sign,
+  timingSafeEqual,
+} from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -18,10 +29,19 @@ const MIN_PASSWORD = 8;
 const VERSION = /^\d{13}-[0-9a-f]{8}$/;
 const ANTHROPIC = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2026-10-21';
-const AI_TIMEOUT = 190000;
+// A whole week of recipes takes a while, and the answer streams all the way.
+const AI_TIMEOUT = 360000;
 // Dollars per million tokens and per search, the same table as in the app.
 const PRICE = { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2, search: 0.01 };
 const DEFAULT_BUDGET = 5;
+// Other apps of the same person get their own place, so they can never overwrite each other's data.
+const APP_NAME = /^[a-z][a-z0-9-]{1,30}$/;
+const MAX_SUBSCRIPTIONS = 10;
+const MAX_ALARMS = 200;
+const MAX_ALARM_DAYS = 60;
+const PUSH_HOSTS = /(^|\.)(push\.apple\.com|fcm\.googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
+const isPushService = (url) => url.protocol === 'https:' && PUSH_HOSTS.test(url.hostname);
+const base64url = (data) => Buffer.from(data).toString('base64url');
 export const costOf = (usage = {}) =>
   ((usage.input_tokens || 0) * PRICE.input +
     (usage.output_tokens || 0) * PRICE.output +
@@ -74,6 +94,22 @@ export function store(dataDir) {
     account,
     saveAccount,
     snapshotsDir: (name) => join(usersDir, name, 'snapshots'),
+    appDir: (name, app) => join(usersDir, name, 'apps', app),
+    pushOf: async (name) => ({ subscriptions: [], alarms: [], ...(await readJson(join(usersDir, name, 'push.json'), {})) }),
+    savePush: (name, data) => writeJson(join(usersDir, name, 'push.json'), data),
+    // The server's own key pair for Web Push, made once. Push services only need the public half.
+    async pushKeys() {
+      const file = join(dataDir, 'push.json');
+      const found = await readJson(file, null);
+      if (found) return found;
+      const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+      const jwk = privateKey.export({ format: 'jwk' });
+      const raw = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')]);
+      const keys = { privateJwk: jwk, publicKey: base64url(raw) };
+      await mkdir(dataDir, { recursive: true });
+      await writeJson(file, keys);
+      return keys;
+    },
     users: async () => (await readdir(usersDir).catch(() => [])).filter((name) => USERNAME.test(name)).sort(),
     invites: () => readJson(invitesFile, []),
     // The Claude key and the budget a new account starts with. The key is never handed out again.
@@ -137,12 +173,42 @@ export function store(dataDir) {
   };
 }
 
+// Web Push: the message is encrypted for that one browser (RFC 8291), the server signs who it is (RFC 8292).
+export function encryptPush(subscription, text) {
+  const browser = Buffer.from(subscription.keys.p256dh, 'base64url');
+  const secret = Buffer.from(subscription.keys.auth, 'base64url');
+  const ecdh = createECDH('prime256v1');
+  const own = ecdh.generateKeys();
+  const info = Buffer.concat([Buffer.from('WebPush: info\0'), browser, own]);
+  const ikm = Buffer.from(hkdfSync('sha256', ecdh.computeSecret(browser), secret, info, 32));
+  const salt = randomBytes(16);
+  const key = Buffer.from(hkdfSync('sha256', ikm, salt, 'Content-Encoding: aes128gcm\0', 16));
+  const nonce = Buffer.from(hkdfSync('sha256', ikm, salt, 'Content-Encoding: nonce\0', 12));
+  const cipher = createCipheriv('aes-128-gcm', key, nonce);
+  const body = Buffer.concat([cipher.update(Buffer.from(text)), cipher.update(Buffer.from([2])), cipher.final(), cipher.getAuthTag()]);
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(4096);
+  return Buffer.concat([salt, size, Buffer.from([own.length]), own, body]);
+}
+function vapidHeader(keys, endpoint, at) {
+  const part = (value) => base64url(JSON.stringify(value));
+  const unsigned = `${part({ typ: 'JWT', alg: 'ES256' })}.${part({
+    aud: new URL(endpoint).origin,
+    exp: Math.floor(at / 1000) + 12 * 3600,
+    sub: 'https://fouad-boudouhi.de/prepora/',
+  })}`;
+  const key = createPrivateKey({ key: keys.privateJwk, format: 'jwk' });
+  const signature = sign('sha256', Buffer.from(unsigned), { key, dsaEncoding: 'ieee-p1363' });
+  return `vapid t=${unsigned}.${base64url(signature)}, k=${keys.publicKey}`;
+}
+
 export function createSyncServer({
   dataDir,
   origins,
   maxBytes = 64 * 1024 * 1024,
   now = Date.now,
   anthropicUrl = ANTHROPIC,
+  pushAllowed = isPushService,
 }) {
   const db = store(dataDir);
 
@@ -172,16 +238,16 @@ export function createSyncServer({
   };
   const failures = new Map();
 
-  const versions = async (name) =>
-    (await readdir(db.snapshotsDir(name)).catch(() => []))
+  const versions = async (name, dir = db.snapshotsDir(name)) =>
+    (await readdir(dir).catch(() => []))
       .filter((file) => file.endsWith('.json'))
       .map((file) => file.slice(0, -5))
       .filter((version) => VERSION.test(version))
       .sort();
 
   // Newest ones, plus the last one of each recent day.
-  async function prune(name) {
-    const all = await versions(name);
+  async function prune(name, dir = db.snapshotsDir(name)) {
+    const all = await versions(name, dir);
     const keep = new Set(all.slice(-KEEP_LATEST));
     const days = new Map();
     all.forEach((version) => {
@@ -190,7 +256,7 @@ export function createSyncServer({
     });
     days.forEach((version) => keep.add(version));
     await Promise.all(
-      all.filter((v) => !keep.has(v)).map((v) => rm(join(db.snapshotsDir(name), `${v}.json`), { force: true }))
+      all.filter((v) => !keep.has(v)).map((v) => rm(join(dir, `${v}.json`), { force: true }))
     );
   }
 
@@ -226,7 +292,42 @@ export function createSyncServer({
     return `${name}.${secret}`;
   };
 
-  return createServer(async (req, res) => {
+  // Hands out every alarm that is due. Taken off the list first, so a crash can lose a reminder but never repeat it.
+  async function sendDueAlarms() {
+    const keys = await db.pushKeys();
+    for (const name of await db.users()) {
+      const push = await db.pushOf(name);
+      const due = push.alarms.filter((alarm) => alarm.at <= now());
+      if (!due.length) continue;
+      push.alarms = push.alarms.filter((alarm) => alarm.at > now());
+      const gone = new Set();
+      for (const alarm of due) {
+        for (const subscription of push.subscriptions) {
+          const response = await fetch(subscription.endpoint, {
+            method: 'POST',
+            headers: {
+              authorization: vapidHeader(keys, subscription.endpoint, now()),
+              'content-encoding': 'aes128gcm',
+              'content-type': 'application/octet-stream',
+              ttl: '3600',
+              urgency: 'high',
+            },
+            body: encryptPush(subscription, JSON.stringify({ title: alarm.title, body: alarm.body, id: alarm.id })),
+            signal: AbortSignal.timeout(15000),
+          }).catch(() => null);
+          if (response?.status === 404 || response?.status === 410) gone.add(subscription.endpoint);
+        }
+      }
+      // Read again: the app may have changed the list while the messages went out.
+      const latest = await db.pushOf(name);
+      await db.savePush(name, {
+        alarms: latest.alarms.filter((alarm) => alarm.at > now()),
+        subscriptions: latest.subscriptions.filter((s) => !gone.has(s.endpoint)),
+      });
+    }
+  }
+
+  const server = createServer(async (req, res) => {
     const origin = req.headers.origin;
     const cors = origins.includes(origin)
       ? {
@@ -420,9 +521,69 @@ export function createSyncServer({
         return json(200, { ok: true });
       }
 
-      const all = await versions(name);
+      if (req.method === 'GET' && pathname === '/v1/push/key')
+        return json(200, { key: (await db.pushKeys()).publicKey });
+      if (req.method === 'POST' && pathname === '/v1/push/subscribe') {
+        const { endpoint, keys } = (await bodyJson()).subscription ?? {};
+        let url = null;
+        try {
+          url = new URL(endpoint);
+        } catch {
+          // Stays null and is refused below.
+        }
+        if (!url || !pushAllowed(url) || !keys?.p256dh || !keys?.auth) return json(400, { error: 'subscription' });
+        const push = await db.pushOf(name);
+        push.subscriptions = [
+          ...push.subscriptions.filter((s) => s.endpoint !== endpoint),
+          { endpoint, keys: { p256dh: String(keys.p256dh), auth: String(keys.auth) } },
+        ].slice(-MAX_SUBSCRIPTIONS);
+        await db.savePush(name, push);
+        return json(200, { ok: true });
+      }
+      if (req.method === 'POST' && pathname === '/v1/push/alarms') {
+        // `set` adds or replaces by id, `cancel` removes by id. The app decides what is due when.
+        const { set = [], cancel = [] } = await bodyJson();
+        if (!Array.isArray(set) || !Array.isArray(cancel)) return json(400, { error: 'alarms' });
+        const clean = set.map(({ id, at, title, body }) => ({
+          id: String(id).slice(0, 100),
+          at: Number(at),
+          title: String(title ?? '').slice(0, 100),
+          body: String(body ?? '').slice(0, 300),
+        }));
+        if (clean.some((alarm) => !alarm.id || !Number.isFinite(alarm.at) || alarm.at > now() + MAX_ALARM_DAYS * DAY))
+          return json(400, { error: 'alarms' });
+        const remove = new Set([...cancel.map(String), ...clean.map((alarm) => alarm.id)]);
+        const push = await db.pushOf(name);
+        push.alarms = [...push.alarms.filter((alarm) => !remove.has(alarm.id)), ...clean];
+        if (push.alarms.length > MAX_ALARMS) return json(400, { error: 'alarms' });
+        await db.savePush(name, push);
+        return json(200, { ok: true });
+      }
+
+      // Without an app name this is the Volumora data, as it always was.
+      const place = pathname.match(/^\/v1\/apps\/([^/]+)\/snapshot$/);
+      if (place && !APP_NAME.test(place[1])) return json(404, { error: 'not found' });
+      const dir = place ? db.appDir(name, place[1]) : db.snapshotsDir(name);
+      const all = await versions(name, dir);
       const latest = all.at(-1);
-      const file = (version) => join(db.snapshotsDir(name), `${version}.json`);
+      const file = (version) => join(dir, `${version}.json`);
+      if (place && req.method === 'GET') {
+        if (!latest) return json(404, { error: 'nothing stored yet' });
+        return send(200, await readFile(file(latest)), { 'content-type': 'application/json', etag: `"${latest}"` });
+      }
+      if (place && req.method === 'PUT') {
+        const claimed = (req.headers['if-match'] || '').replaceAll('"', '');
+        if (latest && claimed !== latest) return json(412, { error: 'newer data', latest }, { etag: `"${latest}"` });
+        const body = await readBody(req);
+        JSON.parse(body.toString('utf8'));
+        const version = `${String(now()).padStart(13, '0')}-${sha256(body).slice(0, 8)}`;
+        await mkdir(dir, { recursive: true });
+        const temporary = join(db.dataDir, `${name}-${version}.tmp`);
+        await writeFile(temporary, body, { mode: 0o600 });
+        await rename(temporary, file(version));
+        await prune(name, dir);
+        return json(200, { version }, { etag: `"${version}"` });
+      }
       if (pathname === '/v1/snapshot' && req.method === 'GET') {
         if (!latest) return json(404, { error: 'nothing stored yet' });
         return send(200, await readFile(file(latest)), { 'content-type': 'application/json', etag: `"${latest}"` });
@@ -460,13 +621,21 @@ export function createSyncServer({
       return json(500, { error: 'server error' });
     }
   });
+  server.sendDueAlarms = sendDueAlarms;
+  return server;
 }
 
 if (process.argv[1]?.endsWith('server.js')) {
   const dataDir = process.env.DATA_DIR || '/data';
   await mkdir(dataDir, { recursive: true });
   const origins = (process.env.ALLOWED_ORIGINS || 'https://fouad-boudouhi.de').split(',');
-  createSyncServer({ dataDir, origins, anthropicUrl: process.env.ANTHROPIC_URL || ANTHROPIC }).listen(Number(process.env.PORT) || 8787, () =>
-    console.log('Volumora sync is listening')
-  );
+  const server = createSyncServer({ dataDir, origins, anthropicUrl: process.env.ANTHROPIC_URL || ANTHROPIC });
+  server.listen(Number(process.env.PORT) || 8787, () => console.log('Volumora sync is listening'));
+  let sending = false;
+  setInterval(async () => {
+    if (sending) return;
+    sending = true;
+    await server.sendDueAlarms().catch((err) => console.error(err));
+    sending = false;
+  }, 5000);
 }
