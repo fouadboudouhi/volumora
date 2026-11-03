@@ -41,6 +41,10 @@ const MAX_ALARMS = 200;
 const MAX_ALARM_DAYS = 60;
 const PUSH_HOSTS = /(^|\.)(push\.apple\.com|fcm\.googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
 const isPushService = (url) => url.protocol === 'https:' && PUSH_HOSTS.test(url.hostname);
+// Each app's alarms only go to that app's own subscriptions. Untagged ones belong together, as before apps said who
+// they are, so an app that sends no name keeps working unchanged.
+const appOf = (value) => (value === undefined ? '' : APP_NAME.test(value) ? value : null);
+const sameApp = (a, b) => (a.app || '') === (b.app || '');
 const base64url = (data) => Buffer.from(data).toString('base64url');
 export const costOf = (usage = {}) =>
   ((usage.input_tokens || 0) * PRICE.input +
@@ -302,14 +306,14 @@ export function createSyncServer({
       push.alarms = push.alarms.filter((alarm) => alarm.at > now());
       const gone = new Set();
       for (const alarm of due) {
-        for (const subscription of push.subscriptions) {
+        for (const subscription of push.subscriptions.filter((s) => sameApp(s, alarm))) {
           const response = await fetch(subscription.endpoint, {
             method: 'POST',
             headers: {
               authorization: vapidHeader(keys, subscription.endpoint, now()),
               'content-encoding': 'aes128gcm',
               'content-type': 'application/octet-stream',
-              ttl: '3600',
+              ttl: String(alarm.ttl ?? 3600),
               urgency: 'high',
             },
             body: encryptPush(subscription, JSON.stringify({ title: alarm.title, body: alarm.body, id: alarm.id })),
@@ -525,37 +529,45 @@ export function createSyncServer({
       if (req.method === 'GET' && pathname === '/v1/push/key')
         return json(200, { key: (await db.pushKeys()).publicKey });
       if (req.method === 'POST' && pathname === '/v1/push/subscribe') {
-        const { endpoint, keys } = (await bodyJson()).subscription ?? {};
+        const request = await bodyJson();
+        const { endpoint, keys } = request.subscription ?? {};
+        const app = appOf(request.app);
         let url = null;
         try {
           url = new URL(endpoint);
         } catch {
           // Stays null and is refused below.
         }
-        if (!url || !pushAllowed(url) || !keys?.p256dh || !keys?.auth) return json(400, { error: 'subscription' });
+        if (!url || !pushAllowed(url) || !keys?.p256dh || !keys?.auth || app === null)
+          return json(400, { error: 'subscription' });
         const push = await db.pushOf(name);
         push.subscriptions = [
           ...push.subscriptions.filter((s) => s.endpoint !== endpoint),
-          { endpoint, keys: { p256dh: String(keys.p256dh), auth: String(keys.auth) } },
+          { endpoint, keys: { p256dh: String(keys.p256dh), auth: String(keys.auth) }, ...(app ? { app } : {}) },
         ].slice(-MAX_SUBSCRIPTIONS);
         await db.savePush(name, push);
         return json(200, { ok: true });
       }
       if (req.method === 'POST' && pathname === '/v1/push/alarms') {
-        // `set` adds or replaces by id, `cancel` removes by id. The app decides what is due when.
-        const { set = [], cancel = [] } = await bodyJson();
-        if (!Array.isArray(set) || !Array.isArray(cancel)) return json(400, { error: 'alarms' });
-        const clean = set.map(({ id, at, title, body }) => ({
+        // `set` adds or replaces by id, `cancel` removes by id, both within the app. The app decides what is due when;
+        // `ttl` says how long a late message is still worth delivering, in seconds.
+        const request = await bodyJson();
+        const { set = [], cancel = [] } = request;
+        const app = appOf(request.app);
+        if (!Array.isArray(set) || !Array.isArray(cancel) || app === null) return json(400, { error: 'alarms' });
+        const clean = set.map(({ id, at, title, body, ttl }) => ({
           id: String(id).slice(0, 100),
           at: Number(at),
           title: String(title ?? '').slice(0, 100),
           body: String(body ?? '').slice(0, 300),
+          ...(ttl != null && Number.isFinite(Number(ttl)) ? { ttl: Math.min(86400, Math.max(0, Math.round(ttl))) } : {}),
+          ...(app ? { app } : {}),
         }));
         if (clean.some((alarm) => !alarm.id || !Number.isFinite(alarm.at) || alarm.at > now() + MAX_ALARM_DAYS * DAY))
           return json(400, { error: 'alarms' });
         const remove = new Set([...cancel.map(String), ...clean.map((alarm) => alarm.id)]);
         const push = await db.pushOf(name);
-        push.alarms = [...push.alarms.filter((alarm) => !remove.has(alarm.id)), ...clean];
+        push.alarms = [...push.alarms.filter((alarm) => (alarm.app || '') !== app || !remove.has(alarm.id)), ...clean];
         if (push.alarms.length > MAX_ALARMS) return json(400, { error: 'alarms' });
         await db.savePush(name, push);
         return json(200, { ok: true });

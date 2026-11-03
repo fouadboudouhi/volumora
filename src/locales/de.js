@@ -422,7 +422,7 @@ const ui = {
   'settings.restVibrate': 'Vibration bei Pausenende',
   'settings.restVibrateHint': 'Wenn das Gerät vibrieren kann',
   'settings.restNotify': 'Benachrichtigung bei Pausenende',
-  'settings.restNotifyHint': 'Wenn die App im Hintergrund ist',
+  'settings.restNotifyHint': 'Auch wenn die App zu oder das Handy gesperrt ist',
   'settings.notifyDenied': 'Benachrichtigungen wurden nicht erlaubt.',
   'settings.appearance': 'Darstellung',
   'settings.theme': 'Design',

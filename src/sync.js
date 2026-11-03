@@ -68,7 +68,7 @@ export function cleanSyncUrl(text) {
 }
 
 const ERRORS = { 401: 'session', 403: 'invite', 429: 'blocked', 413: 'size' };
-async function call(config, path, options = {}) {
+export async function call(config, path, options = {}) {
   let response;
   try {
     response = await fetch(`${config.url}${path}`, {
