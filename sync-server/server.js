@@ -432,8 +432,8 @@ export function createSyncServer({
           // The client or Claude went away; what came through was still paid for.
         } finally {
           clearTimeout(timer);
-          res.end();
         }
+        // Counted before the answer ends, so whoever asks for the budget right after sees this answer in it.
         if (upstream.ok) {
           let usage = {};
           if (/^(event|data):/m.test(text))
@@ -455,6 +455,7 @@ export function createSyncServer({
             }
           await db.addUsage(name, costOf(usage), now());
         }
+        res.end();
         return;
       }
 
