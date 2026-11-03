@@ -4,6 +4,7 @@ import { fmtNumber, plural, t } from '../i18n.js';
 import { icon } from '../icons.js';
 import { alternativesFor, exerciseName } from '../library.js';
 import { BARS, PLATES, defaultBar, isBarbell, platesPerSide } from '../plates.js';
+import { scheduleRest } from '../push.js';
 import { planExerciseFromLibrary, supersetLetters, supersetPosition } from '../plans.js';
 import { navigate, render } from '../render.js';
 import {
@@ -670,6 +671,8 @@ export function updateRest() {
 let notifyTimer = null;
 function armRestNotification() {
   clearTimeout(notifyTimer);
+  // From the server it also reaches a locked phone; the timer below only fires while the page still runs.
+  if (getSettings().restNotify && scheduleRest(state.restUntil)) return;
   if (
     !state.restUntil ||
     !getSettings().restNotify ||

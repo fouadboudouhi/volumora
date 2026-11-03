@@ -419,7 +419,7 @@ const ui = {
   'settings.restVibrate': 'Vibrate when the rest ends',
   'settings.restVibrateHint': 'If the device can vibrate',
   'settings.restNotify': 'Notify when the rest ends',
-  'settings.restNotifyHint': 'When the app is in the background',
+  'settings.restNotifyHint': 'Also when the app is closed or the phone is locked',
   'settings.notifyDenied': 'Notifications were not allowed.',
   'settings.appearance': 'Appearance',
   'settings.theme': 'Theme',

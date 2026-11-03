@@ -2279,3 +2279,148 @@ test('sync server: a due alarm reaches the browser encrypted, once, and a dead s
     await new Promise((r) => pushService.close(r));
   }
 });
+
+test('push alarms reach only their own app, readable and signed, with their own lifetime', async () => {
+  const { createSyncServer, store } = await import('../sync-server/server.js');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { createDecipheriv, createECDH, createPublicKey, hkdfSync, randomBytes, verify } =
+    await import('node:crypto');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dataDir = await mkdtemp(join(tmpdir(), 'volumora-push-'));
+  let clock = Date.UTC(2026, 10, 3, 18);
+  const server = createSyncServer({ dataDir, origins: [], now: () => clock });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const realFetch = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).startsWith('https://web.push.apple.com/')) return realFetch(url, init);
+    sent.push({ url: String(url), headers: init.headers, body: Buffer.from(init.body) });
+    return new Response(null, { status: 201 });
+  };
+  // A browser's side of a subscription: its key pair and secret, and how it opens a message (RFC 8291).
+  const browser = (endpoint) => {
+    const ecdh = createECDH('prime256v1');
+    const auth = randomBytes(16);
+    return {
+      endpoint,
+      keys: { p256dh: ecdh.generateKeys().toString('base64url'), auth: auth.toString('base64url') },
+      open(body) {
+        const salt = body.subarray(0, 16);
+        const sender = body.subarray(21, 21 + body[20]);
+        const info = Buffer.concat([Buffer.from('WebPush: info\0'), ecdh.getPublicKey(), sender]);
+        const ikm = Buffer.from(hkdfSync('sha256', ecdh.computeSecret(sender), auth, info, 32));
+        const key = Buffer.from(hkdfSync('sha256', ikm, salt, 'Content-Encoding: aes128gcm\0', 16));
+        const nonce = Buffer.from(hkdfSync('sha256', ikm, salt, 'Content-Encoding: nonce\0', 12));
+        const sealed = body.subarray(21 + body[20]);
+        const decipher = createDecipheriv('aes-128-gcm', key, nonce);
+        decipher.setAuthTag(sealed.subarray(-16));
+        const plain = Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()]);
+        assert.equal(plain.at(-1), 2, 'one record, marked as the last');
+        return JSON.parse(plain.subarray(0, -1));
+      },
+    };
+  };
+  try {
+    const db = store(dataDir);
+    await db.register('anna', 'long-enough', await db.createInvite());
+    const { token } = await (
+      await realFetch(`${base}/v1/login`, {
+        method: 'POST',
+        body: JSON.stringify({ username: 'anna', password: 'long-enough' }),
+      })
+    ).json();
+    const post = (path, body) =>
+      realFetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+    const volumora = browser('https://web.push.apple.com/volumora');
+    const other = browser('https://web.push.apple.com/other');
+    assert.equal(
+      (
+        await post('/v1/push/subscribe', {
+          subscription: { endpoint: volumora.endpoint, keys: volumora.keys },
+          app: 'volumora',
+        })
+      ).status,
+      200
+    );
+    assert.equal(
+      (await post('/v1/push/subscribe', { subscription: { endpoint: other.endpoint, keys: other.keys } }))
+        .status,
+      200
+    );
+    assert.equal(
+      (
+        await post('/v1/push/subscribe', {
+          subscription: { endpoint: other.endpoint, keys: other.keys },
+          app: 'Bad App',
+        })
+      ).status,
+      400
+    );
+    await post('/v1/push/alarms', { set: [{ id: 'rest', at: clock + 1000, title: 'Kochen', body: 'Zeit' }] });
+    await post('/v1/push/alarms', {
+      app: 'volumora',
+      set: [{ id: 'rest', at: clock + 1000, title: 'Pause vorbei', body: 'Weiter', ttl: 120 }],
+    });
+    await post('/v1/push/alarms', { app: 'volumora', cancel: ['nothing'] });
+    assert.equal((await db.pushOf('anna')).alarms.length, 2, 'the same id in two apps are two alarms');
+
+    await server.sendDueAlarms();
+    assert.equal(sent.length, 0, 'nothing is due yet');
+    clock += 1000;
+    await server.sendDueAlarms();
+    assert.deepEqual(
+      sent.map((s) => [s.url.split('/').pop(), s.headers.ttl]),
+      [
+        ['other', '3600'],
+        ['volumora', '120'],
+      ]
+    );
+    assert.deepEqual(other.open(sent[0].body), { title: 'Kochen', body: 'Zeit', id: 'rest' });
+    assert.equal(volumora.open(sent[1].body).title, 'Pause vorbei');
+    const [, jwt, publicKey] = sent[1].headers.authorization.match(/^vapid t=([^,]+), k=(.+)$/);
+    const [head, claims, signature] = jwt.split('.');
+    const raw = Buffer.from(publicKey, 'base64url');
+    const key = createPublicKey({
+      key: {
+        kty: 'EC',
+        crv: 'P-256',
+        x: raw.subarray(1, 33).toString('base64url'),
+        y: raw.subarray(33).toString('base64url'),
+      },
+      format: 'jwk',
+    });
+    assert.ok(
+      verify(
+        'sha256',
+        Buffer.from(`${head}.${claims}`),
+        { key, dsaEncoding: 'ieee-p1363' },
+        Buffer.from(signature, 'base64url')
+      )
+    );
+    assert.equal(JSON.parse(Buffer.from(claims, 'base64url')).aud, 'https://web.push.apple.com');
+    assert.deepEqual((await db.pushOf('anna')).alarms, [], 'sent alarms are gone');
+
+    await post('/v1/push/alarms', { set: [{ id: 'rest', at: clock + 5000, title: 'Kochen' }] });
+    await post('/v1/push/alarms', {
+      app: 'volumora',
+      set: [{ id: 'rest', at: clock + 5000, title: 'Pause vorbei' }],
+    });
+    await post('/v1/push/alarms', { app: 'volumora', cancel: ['rest'] });
+    assert.deepEqual(
+      (await db.pushOf('anna')).alarms.map((a) => a.title),
+      ['Kochen'],
+      'taking back a rest leaves the other app alone'
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    server.close();
+    server.closeAllConnections?.();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

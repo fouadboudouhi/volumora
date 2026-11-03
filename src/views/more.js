@@ -14,6 +14,7 @@ import { esc, fmtDate, normalizeRange, number, setsCount } from '../util.js';
 import { emptySessionCount, removeEmptySessions, restoreHistory } from '../workout.js';
 import { openAi } from './ai.js';
 import { mediaCredit, parentRow } from './shell.js';
+import { disablePush, enablePush, pushOn } from '../push.js';
 import { isAdmin, syncConfig } from '../sync.js';
 import { bindSync, syncSection } from './sync.js';
 
@@ -46,7 +47,7 @@ function settingsView() {
     ${toggle('restTimer', t('settings.restTimer'), t('settings.restTimerHint'), s.restTimer)}
     <label><span>${t('settings.restDuration')}</span><div class="unit-input"><input name="rest" type="number" min="0" max="600" value="${esc(s.rest)}"><i>${t('settings.seconds')}</i></div></label>
     ${toggle('restSound', t('settings.restSound'), t('settings.restSoundHint'), s.restSound)}
-    ${toggle('restVibrate', t('settings.restVibrate'), t('settings.restVibrateHint'), s.restVibrate !== false)}
+    ${'vibrate' in navigator ? toggle('restVibrate', t('settings.restVibrate'), t('settings.restVibrateHint'), s.restVibrate !== false) : ''}
     ${'Notification' in window ? toggle('restNotify', t('settings.restNotify'), t('settings.restNotifyHint'), s.restNotify) : ''}
     <h2>${t('settings.appearance')}</h2>
     <label><span>${t('settings.language')}</span><select name="language">${option('auto', t('language.auto'), s.language)}${LANGUAGES.map((code) => option(code, languageLabel(code), s.language)).join('')}</select></label>
@@ -105,7 +106,8 @@ async function saveForm(form) {
     restTimer,
     restNotify,
     restSound: f.get('restSound') === 'on',
-    restVibrate: f.get('restVibrate') === 'on',
+    // iPhones cannot vibrate from a web app and get no switch for it; the setting stays for other devices.
+    restVibrate: 'vibrate' in navigator ? f.get('restVibrate') === 'on' : current.restVibrate !== false,
     weeklyGoal: number(f.get('weeklyGoal')),
     defaultSets: setsCount(f.get('defaultSets')),
     defaultRange: normalizeRange(f.get('defaultRange')),
@@ -118,6 +120,8 @@ async function saveForm(form) {
     next.barWeight = inUnit(next.barWeight, newUnit, 20, 45);
   }
   saveSettings(next);
+  if (restNotify && !pushOn()) enablePush();
+  else if (!restNotify && current.restNotify) disablePush();
   if (!restTimer) state.restUntil = 0;
   applyTheme();
   const languageChanged = next.language !== current.language;

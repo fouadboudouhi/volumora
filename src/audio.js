@@ -20,6 +20,8 @@ export function primeAudio() {
 export function beep() {
   if (!getSettings().restSound || !context) return;
   try {
+    // iOS suspends or interrupts the context after a call or a locked screen; it plays once it runs again.
+    if (context.state !== 'running') context.resume().catch(() => {});
     const now = context.currentTime;
     [0, 0.18].forEach((offset) => {
       const osc = context.createOscillator();

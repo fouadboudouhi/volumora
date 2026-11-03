@@ -2944,3 +2944,46 @@ test('the same exercise from the plan and the catalogue is one row with one char
   assert.match(values, /80 kg/, 'the newest session counts, from the catalogue entry');
   assert.ok(await page.locator('.trend-row .sparkline :is(polyline, path)').count(), 'two points, so a line');
 });
+
+test('with push on, a rest asks the server for an alarm at its end and a skipped rest takes it back', async () => {
+  const alarms = [];
+  await page.route('http://127.0.0.1:9/v1/push/alarms', async (route) => {
+    alarms.push(JSON.parse(route.request().postData()));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  // Headless Chromium refuses notifications whatever it is granted; the phone's answer is what counts here.
+  await context.addInitScript(() =>
+    Object.defineProperty(Notification, 'permission', { get: () => 'granted' })
+  );
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('volumora-settings-v2')) || {};
+    localStorage.setItem(
+      'volumora-settings-v2',
+      JSON.stringify({ ...s, restTimer: true, restNotify: true, rest: 90 })
+    );
+    localStorage.setItem('volumora-push', JSON.stringify({ user: 'test', at: new Date().toISOString() }));
+  });
+  await page.reload();
+  await page.click('[data-start="push"]');
+  await page.waitForSelector('.workout-exercise');
+  const first = page.locator('.workout-exercise').nth(0);
+  await first.locator('input[data-set-field="weight"][data-index="0"]').fill('40');
+  await first.locator('input[data-set-field="reps"][data-index="0"]').fill('8');
+  const ticked = Date.now();
+  await first.locator('[data-set-done="0"]').click();
+  await page.waitForSelector('#restTimer.show');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const set = alarms.at(-1);
+  assert.equal(set.app, 'volumora');
+  assert.equal(set.set[0].id, 'rest');
+  assert.equal(set.set[0].title, 'Pause vorbei');
+  assert.equal(set.set[0].ttl, 120);
+  const due = set.set[0].at - ticked;
+  assert.ok(due > 85000 && due < 95000, `alarm in about 90 s, not ${due} ms`);
+  const before = alarms.length;
+  await page.click('[data-rest-skip]');
+  await page.waitForFunction(() => !document.querySelector('#restTimer.show'));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(alarms.length, before + 1);
+  assert.deepEqual(alarms.at(-1), { app: 'volumora', cancel: ['rest'] });
+});

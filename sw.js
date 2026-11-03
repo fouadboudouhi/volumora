@@ -1,4 +1,4 @@
-const VERSION = 'v74';
+const VERSION = 'v75';
 const CACHE = `volumora-${VERSION}`;
 // Cross-origin exercise GIFs get their own bounded cache so the app shell cache stays small and predictable.
 // Its name stays the same across versions: an update must not throw the downloaded animations away.
@@ -41,6 +41,7 @@ const ASSETS = [
   './src/locales/index.js',
   './src/plans.js',
   './src/plates.js',
+  './src/push.js',
   './src/records.js',
   './src/render.js',
   './src/router.js',
@@ -161,5 +162,31 @@ self.addEventListener('fetch', (e) => {
           return res;
         })
     )
+  );
+});
+
+// The end of a rest, sent by the sync server (src/push.js). A tap brings the app back, or opens it.
+self.addEventListener('push', (e) => {
+  let message = {};
+  try {
+    message = e.data?.json() ?? {};
+  } catch {
+    // An unreadable message still says it is from Volumora.
+  }
+  e.waitUntil(
+    self.registration.showNotification(message.title || 'Volumora', {
+      body: message.body || '',
+      tag: `volumora-${message.id || 'push'}`,
+      icon: './assets/icons/icon-192.png',
+    })
+  );
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then((open) => {
+      const client = open.find((entry) => 'focus' in entry);
+      return client ? client.focus() : self.clients.openWindow('./');
+    })
   );
 });
