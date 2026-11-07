@@ -19,7 +19,7 @@ import { initGestures } from './gestures.js';
 import { watchInset } from './viewport.js';
 import { updateRest } from './views/workout.js';
 import { reconcileActive, sessionStarted } from './workout.js';
-import { enablePush, pushOn } from './push.js';
+import { enablePush } from './push.js';
 import { isSignedIn, startSync } from './sync.js';
 
 // The language comes first: migrations may seed the default plan in it.
@@ -28,8 +28,9 @@ runMigrations();
 // Ask the browser not to clear the data under storage pressure. It decides by itself and never asks the person.
 navigator.storage?.persist?.().catch(() => {});
 startSync();
-// Notifications that were switched on before they came from the server move over on their own.
-if (getSettings().restNotify && !pushOn()) enablePush();
+// Every start tells the server again which app this is: a record made against an older server, or a push
+// endpoint the phone has since changed, would otherwise keep the rest signal from arriving.
+if (getSettings().restNotify) enablePush();
 applyTheme();
 state.restUntil = getRestUntil();
 const firstRun = needsOnboarding();

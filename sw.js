@@ -1,4 +1,4 @@
-const VERSION = 'v75';
+const VERSION = 'v76';
 const CACHE = `volumora-${VERSION}`;
 // Cross-origin exercise GIFs get their own bounded cache so the app shell cache stays small and predictable.
 // Its name stays the same across versions: an update must not throw the downloaded animations away.
