@@ -1,4 +1,4 @@
-const VERSION = 'v76';
+const VERSION = 'v77';
 const CACHE = `volumora-${VERSION}`;
 // Cross-origin exercise GIFs get their own bounded cache so the app shell cache stays small and predictable.
 // Its name stays the same across versions: an update must not throw the downloaded animations away.
@@ -21,6 +21,7 @@ const ASSETS = [
   './src/aiPrompts.js',
   './src/aiTools.js',
   './src/app.js',
+  './src/demo.js',
   './src/audio.js',
   './src/backup.js',
   './src/calories.js',
@@ -125,7 +126,9 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(
       fetch(e.request)
         .then((res) => {
-          if (res.ok) store(e, CACHE, './index.html', res.clone());
+          // The demo page is a document too, but never the start page.
+          if (res.ok && !new URL(e.request.url).pathname.endsWith('demo.html'))
+            store(e, CACHE, './index.html', res.clone());
           return res;
         })
         .catch(() => caches.match('./index.html'))

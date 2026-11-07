@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f2f2f7" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Volumora" />
+    <meta name="description" content="Volumora zum Ausprobieren: ohne Konto, mit Beispieldaten." />
+    <meta name="robots" content="noindex" />
+    <title>Volumora · Demo</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="apple-touch-icon" href="assets/icons/icon-192.png" />
+    <link rel="icon" type="image/png" href="assets/icons/favicon-32.png" />
+    <script>
+      try {
+        var s = JSON.parse(sessionStorage.getItem('volumora-settings-v2')) || {};
+        var t =
+          !s.theme || s.theme === 'auto'
+            ? matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+            : s.theme;
+        document.documentElement.dataset.theme = t;
+        var l =
+          s.language && s.language !== 'auto'
+            ? s.language
+            : String(navigator.language || '')
+                .slice(0, 2)
+                .toLowerCase();
+        document.documentElement.lang = /^(de|en)$/.test(l) ? l : 'en';
+      } catch (e) {}
+    </script>
+    <link rel="preload" href="assets/fonts/satoshi-500.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="assets/fonts/satoshi-700.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      /* Says once, quietly, what this page is. */
+      .demo-note {
+        margin: 0;
+        padding: calc(env(safe-area-inset-top) + 8px) 16px 8px;
+        font:
+          500 13px/1.4 -apple-system,
+          system-ui,
+          sans-serif;
+        text-align: center;
+        background: #1c1c1e;
+        color: #fff;
+      }
+      .demo-note a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <p class="demo-note">
+      Demo mit Beispieldaten. Nichts wird gespeichert, der Assistent ist nachgespielt.
+      <a href="https://github.com/fouadboudouhi/volumora">Code auf GitHub</a>
+    </p>
+    <div id="app"></div>
+    <script type="module" src="src/demo.js"></script>
+  </body>
+</html>

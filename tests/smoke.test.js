@@ -2987,3 +2987,32 @@ test('with push on, a rest asks the server for an alarm at its end and a skipped
   assert.equal(alarms.length, before + 1);
   assert.deepEqual(alarms.at(-1), { app: 'volumora', cancel: ['rest'] });
 });
+
+test('the demo shows ten weeks of training without an account, never reaches the server and keeps nothing', async () => {
+  const demo = await browser.newContext({ locale: 'de-DE', serviceWorkers: 'block' });
+  const calls = [];
+  await demo.route('https://raspberrypi.tail9d7f95.ts.net/**', (route) => {
+    calls.push(route.request().url());
+    return route.abort();
+  });
+  const view = await demo.newPage();
+  const problems = [];
+  view.on('pageerror', (error) => problems.push(error.message));
+  await view.goto(`${baseURL}/demo.html`);
+  await view.waitForSelector('.next-card');
+  await view.waitForFunction(
+    () => JSON.parse(sessionStorage.getItem('volumora-history-v2') || '[]').length === 30
+  );
+  await view.click('[data-nav="analytics"]');
+  assert.match(await view.locator('main, #app').first().innerText(), /30/);
+  // The real storage of the domain stays empty: a second page without the demo sees nothing.
+  const plain = await demo.newPage();
+  await plain.goto(`${baseURL}/tests/serve.js`).catch(() => {});
+  const kept = await plain.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith('volumora'))
+  );
+  assert.deepEqual(kept, []);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(problems, []);
+  await demo.close();
+});
