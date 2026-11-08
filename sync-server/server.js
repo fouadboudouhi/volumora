@@ -23,6 +23,9 @@ const KEEP_LATEST = 20;
 const KEEP_DAILY_DAYS = 60;
 const MAX_FAILURES = 10;
 const FAILURE_WINDOW = 10 * 60 * 1000;
+// Wrong passwords for one account, from anywhere: enough for typos, too few to guess.
+const MAX_ACCOUNT_FAILURES = 20;
+const ACCOUNT_WINDOW = 60 * 60 * 1000;
 const DAY = 86400000;
 const USERNAME = /^[a-z0-9][a-z0-9._-]{2,31}$/;
 const MIN_PASSWORD = 8;
@@ -241,6 +244,18 @@ export function createSyncServer({
     };
   };
   const failures = new Map();
+  const accountFailures = new Map();
+  // Counts in a window; the map forgets old entries so it cannot grow without end.
+  const count = (map, key, window, limit) => {
+    const entry = map.get(key);
+    if (entry && now() - entry.at > window) map.delete(key);
+    if (map.size > 10000) for (const [k, v] of map) if (now() - v.at > window) map.delete(k);
+    return (map.get(key)?.count || 0) >= limit;
+  };
+  const note = (map, key) => {
+    const entry = map.get(key);
+    map.set(key, { count: (entry?.count || 0) + 1, at: entry?.at ?? now() });
+  };
 
   const versions = async (name, dir = db.snapshotsDir(name)) =>
     (await readdir(dir).catch(() => []))
@@ -354,12 +369,17 @@ export function createSyncServer({
       const { pathname } = new URL(req.url, 'http://local');
       if (pathname === '/v1/health') return json(200, { ok: true });
 
-      const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress).split(',')[0].trim();
-      const failed = failures.get(ip);
-      if (failed && now() - failed.at > FAILURE_WINDOW) failures.delete(ip);
-      if (failures.get(ip)?.count >= MAX_FAILURES) return json(429, { error: 'too many attempts' });
+      // The proxy in front (Tailscale Funnel) adds the real address last; anything before it the client could
+      // have written itself.
+      const ip =
+        String(req.headers['x-forwarded-for'] || '')
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .pop() || String(req.socket.remoteAddress);
+      if (count(failures, ip, FAILURE_WINDOW, MAX_FAILURES)) return json(429, { error: 'too many attempts' });
       const failure = (status, error) => {
-        failures.set(ip, { count: (failures.get(ip)?.count || 0) + 1, at: now() });
+        note(failures, ip);
         return json(status, { error });
       };
       const bodyJson = async () => JSON.parse((await readBody(req)).toString('utf8') || '{}');
@@ -376,8 +396,14 @@ export function createSyncServer({
         const { username, password } = await bodyJson();
         const name = String(username ?? '').trim().toLowerCase();
         const data = USERNAME.test(name) ? await db.account(name) : null;
-        if (!data || !passwordMatches(String(password ?? ''), data.password)) return failure(401, 'user');
+        if (data && count(accountFailures, name, ACCOUNT_WINDOW, MAX_ACCOUNT_FAILURES))
+          return json(429, { error: 'too many attempts' });
+        if (!data || !passwordMatches(String(password ?? ''), data.password)) {
+          if (data) note(accountFailures, name);
+          return failure(401, 'user');
+        }
         failures.delete(ip);
+        accountFailures.delete(name);
         return json(200, { token: await openSession(name, data) });
       }
 
