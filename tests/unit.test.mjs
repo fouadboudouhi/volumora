@@ -1768,6 +1768,39 @@ test('the sync server keeps accounts apart, needs invitations and refuses stale 
     assert.equal(stranger.headers.get('access-control-allow-origin'), null);
     for (let i = 0; i < 10; i++) await post('/login', { username: 'anna', password: 'wrong-wrong' });
     assert.equal((await post('/login', { username: 'anna', password: 'another-one' })).status, 429);
+
+    // Behind the proxy the last address counts; a made-up first one does not open a new count.
+    const from = (address, body, forged = '') =>
+      fetch(`${base}/login`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': forged ? `${forged}, ${address}` : address,
+        },
+      });
+    clock += 11 * 60 * 1000;
+    for (let i = 0; i < 10; i++)
+      await from('203.0.113.1', { username: 'anna', password: 'wrong-wrong' }, `198.51.100.${i}`);
+    assert.equal(
+      (await from('203.0.113.1', { username: 'anna', password: 'another-one' }, '198.51.100.99')).status,
+      429
+    );
+    // One account, many addresses: after 20 wrong passwords in an hour it waits, even for the right one.
+    clock += 61 * 60 * 1000;
+    for (let i = 0; i < 20; i++)
+      assert.equal(
+        (await from(`203.0.113.${10 + i}`, { username: 'anna', password: 'wrong-wrong' })).status,
+        401
+      );
+    assert.equal((await from('203.0.113.99', { username: 'anna', password: 'another-one' })).status, 429);
+    assert.equal(
+      (await from('203.0.113.98', { username: 'ghost', password: 'another-one' })).status,
+      401,
+      'other names are not touched'
+    );
+    clock += 61 * 60 * 1000;
+    assert.equal((await from('203.0.113.97', { username: 'anna', password: 'another-one' })).status, 200);
   } finally {
     server.close();
     server.closeAllConnections?.();
