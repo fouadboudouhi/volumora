@@ -34,8 +34,32 @@ const ANTHROPIC = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2026-10-21';
 // A whole week of recipes takes a while, and the answer streams all the way.
 const AI_TIMEOUT = 360000;
-// Dollars per million tokens and per search, the same table as in the app.
-const PRICE = { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2, search: 0.01 };
+// Dollars per million tokens and per search, the same table as in the app. A cache entry kept for an hour costs
+// twice the input price to write, the usual five minutes a quarter more.
+const PRICE = { input: 4, output: 20, cacheWrite: 5, cacheWriteHour: 8, cacheRead: 0.2, search: 0.01 };
+// Claude is paid with the owner's key, so the server decides what may be asked for, not the apps: only models this
+// table has a price for, answers no longer than the longest an app needs (Prepora's plan), and of Claude's paid
+// extras only the two the apps use.
+const MODELS = { 'claude-opus-5-5': PRICE };
+const MAX_OUTPUT_TOKENS = 32000;
+const AI_BETAS = ['server-side-fallback-2026-07-01', 'server-side-fallback-2026-06-01'];
+const SERVER_TOOL = /^web_(search|fetch)_\d{8}$/;
+const MAX_TOOL_USES = 5;
+// A page Claude fetches is read as input and paid for; this is plenty for a recipe.
+const MAX_FETCH_TOKENS = 60000;
+const REFUSED_FIELDS = ['mcp_servers', 'container', 'speed', 'service_tier', 'inference_geo'];
+// For guessing what a request may cost before it runs: a picture, and what one web search brings back.
+const IMAGE_TOKENS = 5000;
+const SEARCH_TOKENS = 10000;
+// Requests of one account that may be on their way to Claude at the same time.
+const MAX_AI_PARALLEL = 4;
+// Sign-in, push and admin calls are a few hundred bytes. Only snapshots and Claude requests carry weight, and those
+// are read only once it is known who sends them. A Claude request holds a conversation and at most a few pictures.
+const SMALL_BODY = 16 * 1024;
+const ALARM_BODY = 256 * 1024;
+const AI_BODY = 8 * 1024 * 1024;
+// How much a stranger may still send once the answer is out (it is dropped) before the connection is cut.
+const UNREAD_BYTES = 1024 * 1024;
 const DEFAULT_BUDGET = 5;
 // Other apps of the same person get their own place, so they can never overwrite each other's data.
 const APP_NAME = /^[a-z][a-z0-9-]{1,30}$/;
@@ -49,13 +73,115 @@ const isPushService = (url) => url.protocol === 'https:' && PUSH_HOSTS.test(url.
 const appOf = (value) => (value === undefined ? '' : APP_NAME.test(value) ? value : null);
 const sameApp = (a, b) => (a.app || '') === (b.app || '');
 const base64url = (data) => Buffer.from(data).toString('base64url');
-export const costOf = (usage = {}) =>
-  ((usage.input_tokens || 0) * PRICE.input +
-    (usage.output_tokens || 0) * PRICE.output +
-    (usage.cache_creation_input_tokens || 0) * PRICE.cacheWrite +
-    (usage.cache_read_input_tokens || 0) * PRICE.cacheRead) /
-    1e6 +
-  (usage.server_tool_use?.web_search_requests || 0) * PRICE.search;
+export const costOf = (usage = {}, price = PRICE) => {
+  const written = usage.cache_creation_input_tokens || 0;
+  const forAnHour = Math.min(written, usage.cache_creation?.ephemeral_1h_input_tokens || 0);
+  return (
+    ((usage.input_tokens || 0) * price.input +
+      (usage.output_tokens || 0) * price.output +
+      (written - forAnHour) * price.cacheWrite +
+      forAnHour * price.cacheWriteHour +
+      (usage.cache_read_input_tokens || 0) * price.cacheRead) /
+      1e6 +
+    (usage.server_tool_use?.web_search_requests || 0) * price.search
+  );
+};
+
+// Roughly how many tokens something holds: text by its length, a picture at a flat figure whatever its bytes.
+function tokensIn(value) {
+  if (typeof value === 'string') return value.length / 3;
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + tokensIn(item), 0);
+  if (!value || typeof value !== 'object') return 1;
+  if (value.type === 'image' && value.source?.type === 'base64') return IMAGE_TOKENS;
+  return Object.values(value).reduce((sum, item) => sum + tokensIn(item), 0);
+}
+
+// The request as it goes on to Claude with a guess at what it may cost, or what is wrong with it. The guess is the
+// longest answer allowed plus everything Claude has to read: the request itself and what its web tools may bring.
+export function aiRequest(asked) {
+  if (!asked || typeof asked !== 'object' || Array.isArray(asked)) return { error: 'request' };
+  const price = typeof asked.model === 'string' && Object.hasOwn(MODELS, asked.model) ? MODELS[asked.model] : null;
+  if (!price) return { error: 'model' };
+  const length = Number(asked.max_tokens);
+  if (!Number.isInteger(length) || length < 1) return { error: 'request' };
+  if (REFUSED_FIELDS.some((field) => field in asked)) return { error: 'request' };
+  if (asked.tools !== undefined && !Array.isArray(asked.tools)) return { error: 'request' };
+  const tools = [];
+  let fromTheWeb = 0;
+  let searches = 0;
+  for (const tool of asked.tools || []) {
+    if (!tool || typeof tool !== 'object') return { error: 'request' };
+    // The apps' own tools run on the phone and cost nothing extra; Claude's own tools are billed per use.
+    if (tool.type === undefined || tool.type === 'custom') tools.push(tool);
+    else if (typeof tool.type !== 'string' || !SERVER_TOOL.test(tool.type)) return { error: 'tool' };
+    else {
+      const given = Number(tool.max_uses);
+      const uses = given >= 1 ? Math.min(Math.floor(given), MAX_TOOL_USES) : MAX_TOOL_USES;
+      if (tool.type.startsWith('web_fetch')) {
+        const page = Number(tool.max_content_tokens);
+        const size = page >= 1 ? Math.min(Math.floor(page), MAX_FETCH_TOKENS) : MAX_FETCH_TOKENS;
+        tools.push({ ...tool, max_uses: uses, max_content_tokens: size });
+        fromTheWeb += uses * size;
+      } else {
+        tools.push({ ...tool, max_uses: uses });
+        fromTheWeb += uses * SEARCH_TOKENS;
+        searches += uses;
+      }
+    }
+  }
+  const request = { ...asked, max_tokens: Math.min(length, MAX_OUTPUT_TOKENS), ...(asked.tools ? { tools } : {}) };
+  const inputTokens = Math.ceil(tokensIn([request.system, request.tools, request.messages]));
+  const dollars =
+    ((inputTokens + fromTheWeb) * price.input + request.max_tokens * price.output) / 1e6 + searches * price.search;
+  return { price, request, estimate: { inputTokens, dollars } };
+}
+
+// Reads what an answer costs while it passes through; null when it said nothing about that at all. An answer that
+// breaks off never says how long it got, so its length is then estimated from the text that came (hidden thinking
+// is not in it, so this is the lower end).
+function usageMeter(streamed) {
+  let rest = '';
+  let usage = null;
+  let written = 0;
+  let ended = false;
+  const read = (line) => {
+    if (!line.startsWith('data:')) return;
+    try {
+      const event = JSON.parse(line.slice(5));
+      if (event.type === 'message_start') usage = { ...event.message?.usage };
+      else if (event.type === 'message_delta') {
+        usage = { ...usage, ...event.usage };
+        ended = true;
+      } else if (event.type === 'content_block_delta') {
+        const { text, thinking, partial_json: input } = event.delta || {};
+        written += String(text ?? thinking ?? input ?? '').length;
+      }
+    } catch {
+      // A broken line carries no usage.
+    }
+  };
+  return {
+    feed(text) {
+      rest += text;
+      if (!streamed) return;
+      const lines = rest.split(/\r?\n/);
+      rest = lines.pop();
+      lines.forEach(read);
+    },
+    usage() {
+      if (!streamed) {
+        try {
+          return JSON.parse(rest).usage || null;
+        } catch {
+          return null;
+        }
+      }
+      read(rest);
+      if (ended || !usage) return usage;
+      return { ...usage, output_tokens: Math.max(usage.output_tokens || 0, Math.ceil(written / 3)) };
+    },
+  };
+}
 const monthKey = (at) => new Date(at).toISOString().slice(0, 7);
 const asBudget = (value) => {
   const n = Number(value);
@@ -95,11 +221,38 @@ export function store(dataDir) {
     await mkdir(join(usersDir, name, 'snapshots'), { recursive: true });
     await writeJson(accountFile(name), data);
   };
+  // One change at a time per file: read, change and write back as a whole. Without this, two requests that end in
+  // the same moment overwrite each other, and a counted cost, a new sign-in or a used invitation is gone again.
+  const queues = new Map();
+  const exclusive = (key, work) => {
+    const run = (queues.get(key) || Promise.resolve()).then(() => work());
+    const tail = run.catch(() => {});
+    queues.set(key, tail);
+    tail.then(() => queues.get(key) === tail && queues.delete(key));
+    return run;
+  };
+  // The name of no account, so the list of invitations has a queue of its own.
+  const INVITES = '/invites';
+  const update = (name, change) =>
+    exclusive(name, async () => {
+      const data = await account(name);
+      if (!data) return null;
+      const next = change(data);
+      await saveAccount(name, next);
+      return next;
+    });
+  const invites = () => readJson(invitesFile, []);
+  const saveInvites = async (list) => {
+    await mkdir(dataDir, { recursive: true });
+    await writeJson(invitesFile, list);
+  };
   return {
     dataDir,
     usersDir,
     account,
     saveAccount,
+    exclusive,
+    update,
     snapshotsDir: (name) => join(usersDir, name, 'snapshots'),
     appDir: (name, app) => join(usersDir, name, 'apps', app),
     pushOf: async (name) => ({ subscriptions: [], alarms: [], ...(await readJson(join(usersDir, name, 'push.json'), {})) }),
@@ -118,7 +271,7 @@ export function store(dataDir) {
       return keys;
     },
     users: async () => (await readdir(usersDir).catch(() => [])).filter((name) => USERNAME.test(name)).sort(),
-    invites: () => readJson(invitesFile, []),
+    invites,
     // The Claude key and the budget a new account starts with. The key is never handed out again.
     ai: () => readJson(aiFile, {}),
     saveAi: async (data) => {
@@ -127,56 +280,44 @@ export function store(dataDir) {
     },
     budgetOf: (data, ai) => asBudget(data?.budget) ?? asBudget(ai?.defaultBudget) ?? DEFAULT_BUDGET,
     usedThisMonth: (data, at = Date.now()) => Number(data?.usage?.[monthKey(at)]) || 0,
-    async addUsage(name, dollars, at = Date.now()) {
-      const data = await account(name);
-      if (!data) return;
-      const month = monthKey(at);
-      const usage = { ...(data.usage || {}), [month]: (Number(data.usage?.[month]) || 0) + dollars };
-      await saveAccount(name, { ...data, usage });
-    },
-    async setAdmin(name, admin) {
-      const data = await account(name);
-      if (!data) return false;
-      await saveAccount(name, { ...data, admin: !!admin });
-      return true;
-    },
-    async setBudget(name, budget) {
-      const data = await account(name);
-      if (!data) return false;
-      const value = asBudget(budget);
-      const { budget: old, ...rest } = data;
-      await saveAccount(name, value === null ? rest : { ...rest, budget: value });
-      return true;
-    },
-    saveInvites: async (list) => {
-      await mkdir(dataDir, { recursive: true });
-      await writeJson(invitesFile, list);
-    },
-    async createInvite() {
-      const code = randomBytes(6).toString('hex').match(/.{4}/g).join('-');
-      await this.saveInvites([...(await this.invites()), { code, createdAt: new Date().toISOString() }]);
-      return code;
-    },
-    async register(name, password, invite) {
+    addUsage: (name, dollars, at = Date.now()) =>
+      update(name, (data) => {
+        const month = monthKey(at);
+        return { ...data, usage: { ...(data.usage || {}), [month]: (Number(data.usage?.[month]) || 0) + dollars } };
+      }),
+    setAdmin: async (name, admin) => !!(await update(name, (data) => ({ ...data, admin: !!admin }))),
+    setBudget: async (name, budget) =>
+      !!(await update(name, ({ budget: old, ...rest }) => {
+        const value = asBudget(budget);
+        return value === null ? rest : { ...rest, budget: value };
+      })),
+    saveInvites,
+    createInvite: () =>
+      exclusive(INVITES, async () => {
+        const code = randomBytes(6).toString('hex').match(/.{4}/g).join('-');
+        await saveInvites([...(await invites()), { code, createdAt: new Date().toISOString() }]);
+        return code;
+      }),
+    register(name, password, invite) {
       if (!USERNAME.test(name)) return { error: 'username' };
       if (String(password).length < MIN_PASSWORD) return { error: 'password' };
-      const invites = await this.invites();
-      const found = invites.find((i) => i.code === String(invite).trim().toLowerCase() && !i.usedBy);
-      if (!found) return { error: 'invite' };
-      if (await account(name)) return { error: 'taken' };
-      found.usedBy = name;
-      found.usedAt = new Date().toISOString();
-      await saveAccount(name, { password: hashPassword(password), createdAt: found.usedAt, sessions: [] });
-      await this.saveInvites(invites);
-      return { ok: true };
+      // One registration at a time, and the invitation is marked as used before the account exists: otherwise
+      // several people signing up in the same moment would all get in on one code.
+      return exclusive(INVITES, async () => {
+        const list = await invites();
+        const found = list.find((i) => i.code === String(invite).trim().toLowerCase() && !i.usedBy);
+        if (!found) return { error: 'invite' };
+        if (await account(name)) return { error: 'taken' };
+        found.usedBy = name;
+        found.usedAt = new Date().toISOString();
+        await saveInvites(list);
+        await saveAccount(name, { password: hashPassword(password), createdAt: found.usedAt, sessions: [] });
+        return { ok: true };
+      });
     },
-    async setPassword(name, password) {
-      const data = await account(name);
-      if (!data) return false;
-      // Every device has to sign in again with the new password.
-      await saveAccount(name, { ...data, password: hashPassword(password), sessions: [] });
-      return true;
-    },
+    // Every device has to sign in again with the new password.
+    setPassword: async (name, password) =>
+      !!(await update(name, (data) => ({ ...data, password: hashPassword(password), sessions: [] }))),
   };
 }
 
@@ -245,6 +386,18 @@ export function createSyncServer({
   };
   const failures = new Map();
   const accountFailures = new Map();
+  // Wrong passwords per account are also kept on disk: a restart must not hand out a fresh set of guesses.
+  // Addresses stay in memory only.
+  const failuresFile = join(dataDir, 'failures.json');
+  const ready = readJson(failuresFile, {}).then((saved) => {
+    for (const [name, entry] of Object.entries(saved && typeof saved === 'object' ? saved : {}))
+      if (USERNAME.test(name) && Number.isFinite(entry?.count) && Number.isFinite(entry?.at))
+        accountFailures.set(name, { count: entry.count, at: entry.at });
+  });
+  const rememberFailures = () =>
+    db.exclusive('/failures', () => writeJson(failuresFile, Object.fromEntries(accountFailures))).catch(() => {});
+  // What each account has on its way to Claude right now: how many requests, and what they may cost at most.
+  const aiRunning = new Map();
   // Counts in a window; the map forgets old entries so it cannot grow without end.
   const count = (map, key, window, limit) => {
     const entry = map.get(key);
@@ -279,35 +432,45 @@ export function createSyncServer({
     );
   }
 
-  // Too much data is read to its end and thrown away, so the client still gets a proper answer.
-  const readBody = (req) =>
+  // A body over its limit is never kept in memory. A small one is refused as soon as that is clear. A large upload
+  // from someone signed in (`patient`) is read on to its end and thrown away, up to twice the limit, so the app gets
+  // a proper answer instead of a broken connection.
+  const readBody = (req, limit = maxBytes, patient = false) =>
     new Promise((resolve, reject) => {
+      const tooLarge = () => reject(Object.assign(new Error('too large'), { status: 413 }));
+      if (!patient && Number(req.headers['content-length']) > limit) return tooLarge();
       const chunks = [];
       let size = 0;
       req.on('data', (chunk) => {
         size += chunk.length;
-        if (size <= maxBytes) chunks.push(chunk);
+        if (size <= limit) {
+          chunks.push(chunk);
+          return;
+        }
+        chunks.length = 0;
+        if (!patient || size > limit * 2) {
+          req.removeAllListeners('data');
+          tooLarge();
+        }
       });
-      req.on('end', () =>
-        size > maxBytes
-          ? reject(Object.assign(new Error('too large'), { status: 413 }))
-          : resolve(Buffer.concat(chunks))
-      );
+      req.on('end', () => (size > limit ? tooLarge() : resolve(Buffer.concat(chunks))));
       req.on('error', reject);
     });
 
+  // `name.secret`: the name may hold dots itself, the secret never does, so the last dot is the one that divides.
   const session = async (token) => {
-    if (!token || !token.includes('.')) return null;
-    const [name, secret] = token.split('.');
+    const cut = token ? token.lastIndexOf('.') : -1;
+    if (cut < 1) return null;
+    const name = token.slice(0, cut);
     if (!USERNAME.test(name)) return null;
     const data = await db.account(name);
-    const hashed = sha256(secret);
-    return data?.sessions?.some((s) => s.hash === hashed) ? { name, data } : null;
+    const hash = sha256(token.slice(cut + 1));
+    return data?.sessions?.some((s) => s.hash === hash) ? { name, data, hash } : null;
   };
-  const openSession = async (name, data) => {
+  const openSession = async (name) => {
     const secret = randomBytes(32).toString('hex');
-    const sessions = [...(data.sessions || []), { hash: sha256(secret), at: new Date(now()).toISOString() }].slice(-20);
-    await db.saveAccount(name, { ...data, sessions });
+    const entry = { hash: sha256(secret), at: new Date(now()).toISOString() };
+    await db.update(name, (data) => ({ ...data, sessions: [...(data.sessions || []), entry].slice(-20) }));
     return `${name}.${secret}`;
   };
 
@@ -358,9 +521,21 @@ export function createSyncServer({
           vary: 'origin',
         }
       : {};
+    // How much of an upload is still let through (and dropped) once the answer is out. Little for a stranger, a
+    // whole backup for someone signed in, whose app should get its answer rather than a broken connection.
+    let unreadLimit = UNREAD_BYTES;
+    let dropping = false;
     const send = (status, body = null, headers = {}) => {
       res.writeHead(status, { ...cors, 'cache-control': 'no-store', ...headers });
       res.end(body);
+      if (req.complete || dropping) return;
+      dropping = true;
+      let unread = 0;
+      req.on('error', () => {});
+      req.on('data', (chunk) => {
+        unread += chunk.length;
+        if (unread > unreadLimit) req.destroy();
+      });
     };
     const json = (status, value, headers) =>
       send(status, JSON.stringify(value), { 'content-type': 'application/json', ...headers });
@@ -382,7 +557,11 @@ export function createSyncServer({
         note(failures, ip);
         return json(status, { error });
       };
-      const bodyJson = async () => JSON.parse((await readBody(req)).toString('utf8') || '{}');
+      const bodyJson = async (limit = SMALL_BODY) => {
+        const value = JSON.parse((await readBody(req, Math.min(limit, maxBytes))).toString('utf8') || '{}');
+        return value && typeof value === 'object' ? value : {};
+      };
+      await ready;
 
       if (req.method === 'POST' && pathname === '/v1/register') {
         const { username, password, invite } = await bodyJson();
@@ -390,7 +569,7 @@ export function createSyncServer({
         const result = await db.register(name, String(password ?? ''), invite ?? '');
         if (result.error) return failure(result.error === 'invite' ? 403 : 400, result.error);
         failures.delete(ip);
-        return json(200, { token: await openSession(name, await db.account(name)) });
+        return json(200, { token: await openSession(name) });
       }
       if (req.method === 'POST' && pathname === '/v1/login') {
         const { username, password } = await bodyJson();
@@ -399,94 +578,112 @@ export function createSyncServer({
         if (data && count(accountFailures, name, ACCOUNT_WINDOW, MAX_ACCOUNT_FAILURES))
           return json(429, { error: 'too many attempts' });
         if (!data || !passwordMatches(String(password ?? ''), data.password)) {
-          if (data) note(accountFailures, name);
+          if (data) {
+            note(accountFailures, name);
+            await rememberFailures();
+          }
           return failure(401, 'user');
         }
         failures.delete(ip);
-        accountFailures.delete(name);
-        return json(200, { token: await openSession(name, data) });
+        if (accountFailures.delete(name)) await rememberFailures();
+        return json(200, { token: await openSession(name) });
       }
 
       const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
       const who = await session(token);
       if (!who) return failure(401, 'session');
       failures.delete(ip);
+      unreadLimit = maxBytes;
       const { name } = who;
       if (req.method === 'GET' && pathname === '/v1/me')
         return json(200, { username: name, admin: !!who.data.admin, ai: await aiState(who.data) });
       if (req.method === 'POST' && pathname === '/v1/ai/messages') {
         const ai = await db.ai();
         if (!ai.key) return json(503, { error: 'no ai' });
-        const budget = db.budgetOf(who.data, ai);
-        const used = db.usedThisMonth(who.data, now());
-        if (used >= budget) return json(402, { error: 'budget', used, budget });
-        const body = await readBody(req);
-        JSON.parse(body.toString('utf8'));
-        // The caller going away ends the request at Claude as well, so nobody pays for an answer no one reads.
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), AI_TIMEOUT);
-        res.on('close', () => {
-          if (!res.writableFinished) controller.abort();
-        });
-        let upstream;
+        // A place is taken before anything of the request is read, so one account cannot make the server hold many
+        // large requests at once. `reserved` is what this request may cost, once that is known.
+        const places = aiRunning.get(name) || { count: 0, dollars: 0 };
+        if (places.count >= MAX_AI_PARALLEL) return json(429, { error: 'busy' });
+        aiRunning.set(name, { count: places.count + 1, dollars: places.dollars });
+        let reserved = 0;
         try {
-          upstream = await fetch(`${anthropicUrl}/v1/messages`, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': ai.key,
-              'anthropic-version': req.headers['anthropic-version'] || ANTHROPIC_VERSION,
-              ...(req.headers['anthropic-beta'] ? { 'anthropic-beta': req.headers['anthropic-beta'] } : {}),
-            },
-            body,
-            signal: controller.signal,
+          const asked = JSON.parse((await readBody(req, AI_BODY, true)).toString('utf8'));
+          const { price, request, estimate, error } = aiRequest(asked);
+          if (error) return json(400, { error });
+          // Looked at one request at a time, with the account read fresh. The budget has to cover what this request
+          // may cost, and what is still on its way to Claude counts as spent already: otherwise many requests sent
+          // in the same moment would all pass on the same old figure.
+          const refused = await db.exclusive(name, async () => {
+            const data = (await db.account(name)) || who.data;
+            const budget = db.budgetOf(data, ai);
+            const used = db.usedThisMonth(data, now());
+            const running = aiRunning.get(name);
+            if (used >= budget || used + estimate.dollars > budget) return [402, { error: 'budget', used, budget }];
+            if (used + running.dollars + estimate.dollars > budget) return [429, { error: 'busy' }];
+            reserved = estimate.dollars;
+            aiRunning.set(name, { count: running.count, dollars: running.dollars + reserved });
+            return null;
           });
-        } catch {
-          clearTimeout(timer);
-          return json(502, { error: 'anthropic' });
-        }
-        res.writeHead(upstream.status, {
-          ...cors,
-          'cache-control': 'no-store',
-          'content-type': upstream.headers.get('content-type') || 'application/json',
-        });
-        // Streamed through unchanged; the usage figures in the events say what this answer cost.
-        const decoder = new TextDecoder();
-        let text = '';
-        try {
-          for await (const chunk of upstream.body) {
-            res.write(chunk);
-            text += decoder.decode(chunk, { stream: true });
-          }
-        } catch {
-          // The client or Claude went away; what came through was still paid for.
-        } finally {
-          clearTimeout(timer);
-        }
-        // Counted before the answer ends, so whoever asks for the budget right after sees this answer in it.
-        if (upstream.ok) {
-          let usage = {};
-          if (/^(event|data):/m.test(text))
-            text.split(/\r?\n/).forEach((line) => {
-              if (!line.startsWith('data:')) return;
-              try {
-                const event = JSON.parse(line.slice(5));
-                if (event.type === 'message_start') usage = { ...event.message?.usage };
-                else if (event.type === 'message_delta') usage = { ...usage, ...event.usage };
-              } catch {
-                // A broken line carries no usage.
-              }
+          if (refused) return json(...refused);
+          // The caller going away ends the request at Claude as well, so nobody pays for an answer no one reads.
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), AI_TIMEOUT);
+          res.on('close', () => {
+            if (!res.writableFinished) controller.abort();
+          });
+          const version = String(req.headers['anthropic-version'] || '');
+          const betas = String(req.headers['anthropic-beta'] || '')
+            .split(',')
+            .map((beta) => beta.trim())
+            .filter((beta) => AI_BETAS.includes(beta));
+          let upstream;
+          try {
+            upstream = await fetch(`${anthropicUrl}/v1/messages`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': ai.key,
+                'anthropic-version': /^\d{4}-\d{2}-\d{2}$/.test(version) ? version : ANTHROPIC_VERSION,
+                ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}),
+              },
+              body: JSON.stringify(request),
+              signal: controller.signal,
             });
-          else
-            try {
-              usage = JSON.parse(text).usage || {};
-            } catch {
-              // No usage to count.
+          } catch {
+            clearTimeout(timer);
+            return json(502, { error: 'anthropic' });
+          }
+          const kind = upstream.headers.get('content-type') || 'application/json';
+          res.writeHead(upstream.status, { ...cors, 'cache-control': 'no-store', 'content-type': kind });
+          // Streamed through unchanged; the usage figures in the events say what this answer cost.
+          const decoder = new TextDecoder();
+          const meter = usageMeter(kind.includes('text/event-stream'));
+          try {
+            for await (const chunk of upstream.body) {
+              if (!res.destroyed) res.write(chunk);
+              meter.feed(decoder.decode(chunk, { stream: true }));
             }
-          await db.addUsage(name, costOf(usage), now());
+          } catch {
+            // The client or Claude went away; what came through was still paid for.
+          } finally {
+            clearTimeout(timer);
+          }
+          // Counted before the answer ends, so whoever asks for the budget right after sees this answer in it. An
+          // answer that broke off before it said anything about its cost was still read by Claude: that much is
+          // counted. A cost that cannot be written down must not take the answer, or the server, with it.
+          try {
+            const usage = meter.usage() || { input_tokens: estimate.inputTokens };
+            if (upstream.ok) await db.addUsage(name, costOf(usage, price), now());
+          } catch (err) {
+            console.error(err);
+          }
+          res.end();
+          return;
+        } finally {
+          const running = aiRunning.get(name);
+          if (!running || running.count <= 1) aiRunning.delete(name);
+          else aiRunning.set(name, { count: running.count - 1, dollars: Math.max(0, running.dollars - reserved) });
         }
-        res.end();
-        return;
       }
 
       if (pathname.startsWith('/v1/admin/')) {
@@ -547,8 +744,10 @@ export function createSyncServer({
         return json(404, { error: 'not found' });
       }
       if (req.method === 'POST' && pathname === '/v1/logout') {
-        const hashed = sha256(token.split('.')[1]);
-        await db.saveAccount(name, { ...who.data, sessions: who.data.sessions.filter((s) => s.hash !== hashed) });
+        await db.update(name, (data) => ({
+          ...data,
+          sessions: (data.sessions || []).filter((s) => s.hash !== who.hash),
+        }));
         return json(200, { ok: true });
       }
 
@@ -577,7 +776,7 @@ export function createSyncServer({
       if (req.method === 'POST' && pathname === '/v1/push/alarms') {
         // `set` adds or replaces by id, `cancel` removes by id, both within the app. The app decides what is due when;
         // `ttl` says how long a late message is still worth delivering, in seconds.
-        const request = await bodyJson();
+        const request = await bodyJson(ALARM_BODY);
         const { set = [], cancel = [] } = request;
         const app = appOf(request.app);
         if (!Array.isArray(set) || !Array.isArray(cancel) || app === null) return json(400, { error: 'alarms' });
@@ -613,7 +812,7 @@ export function createSyncServer({
       if (place && req.method === 'PUT') {
         const claimed = (req.headers['if-match'] || '').replaceAll('"', '');
         if (latest && claimed !== latest) return json(412, { error: 'newer data', latest }, { etag: `"${latest}"` });
-        const body = await readBody(req);
+        const body = await readBody(req, maxBytes, true);
         JSON.parse(body.toString('utf8'));
         const version = `${String(now()).padStart(13, '0')}-${sha256(body).slice(0, 8)}`;
         await mkdir(dir, { recursive: true });
@@ -630,7 +829,7 @@ export function createSyncServer({
       if (pathname === '/v1/snapshot' && req.method === 'PUT') {
         const claimed = (req.headers['if-match'] || '').replaceAll('"', '');
         if (latest && claimed !== latest) return json(412, { error: 'newer data', latest }, { etag: `"${latest}"` });
-        const body = await readBody(req);
+        const body = await readBody(req, maxBytes, true);
         JSON.parse(body.toString('utf8'));
         const version = `${String(now()).padStart(13, '0')}-${sha256(body).slice(0, 8)}`;
         const temporary = join(db.dataDir, `${name}-${version}.tmp`);
@@ -654,6 +853,11 @@ export function createSyncServer({
         return send(200, await readFile(file(old[1])), { 'content-type': 'application/json' });
       return json(404, { error: 'not found' });
     } catch (err) {
+      // An answer that is already on its way cannot be replaced by an error; trying would bring the server down.
+      if (res.headersSent) {
+        console.error(err);
+        return res.destroy();
+      }
       if (err instanceof SyntaxError) return json(400, { error: 'not json' });
       if (err.status === 413) return json(413, { error: 'too large' });
       console.error(err);

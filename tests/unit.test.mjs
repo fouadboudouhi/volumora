@@ -1990,20 +1990,30 @@ test('the sync server keeps accounts apart, needs invitations and refuses stale 
   }
 });
 
-// Stands in for Anthropic: accepts one key, streams a short answer with usage figures.
-async function fakeAnthropic({ key = 'sk-ant-api-good', inputTokens = 100000, outputTokens = 10000 } = {}) {
+// Stands in for Anthropic: accepts one key, streams a short answer with usage figures. `delay` holds the answer
+// back so several requests are on their way at once; `cut` breaks the answer off before its closing figures, and
+// `cut: 'early'` before it says anything at all.
+async function fakeAnthropic({
+  key = 'sk-ant-api-good',
+  inputTokens = 100000,
+  outputTokens = 10000,
+  delay = 0,
+  cut = false,
+} = {}) {
   const { createServer } = await import('node:http');
   const calls = [];
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
-    req.on('end', () => {
+    req.on('end', async () => {
       calls.push({
         url: req.url,
         key: req.headers['x-api-key'],
         version: req.headers['anthropic-version'],
+        beta: req.headers['anthropic-beta'],
         body,
       });
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       if (req.headers['x-api-key'] !== key) {
         res.writeHead(401, { 'content-type': 'application/json' });
         return res.end(
@@ -2022,7 +2032,11 @@ async function fakeAnthropic({ key = 'sk-ant-api-good', inputTokens = 100000, ou
         { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: outputTokens } },
       ];
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''));
+      const lines = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+      if (!cut) return res.end(lines.join(''));
+      if (cut === 'early') res.flushHeaders();
+      else res.write(lines.slice(0, 3).join(''));
+      setTimeout(() => res.destroy(), 30);
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -2059,7 +2073,8 @@ test('the server forwards to Claude with its own key, counts the cost and stops 
     request(path, token, { method, body: body === undefined ? undefined : JSON.stringify(body) });
   const ask = (token) =>
     json('/ai/messages', token, 'POST', {
-      model: 'x',
+      model: 'claude-opus-5-5',
+      max_tokens: 8000,
       stream: true,
       messages: [{ role: 'user', content: 'Hi' }],
     });
@@ -2139,6 +2154,342 @@ test('the server forwards to Claude with its own key, counts the cost and stops 
     claude.server.close();
     claude.server.closeAllConnections?.();
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+// A sync server on a folder of its own, and the few calls the tests below make to it.
+async function syncServer(options = {}) {
+  const { createSyncServer, store } = await import('../sync-server/server.js');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dataDir = options.dataDir || (await mkdtemp(join(tmpdir(), 'volumora-server-')));
+  const server = createSyncServer({ origins: [], ...options, dataDir });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/v1`;
+  const db = store(dataDir);
+  const call = (path, { token, method = 'GET', body, headers } = {}) =>
+    fetch(`${base}${path}`, {
+      method,
+      body: body === undefined || typeof body === 'string' ? body : JSON.stringify(body),
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
+    });
+  return {
+    base,
+    call,
+    db,
+    dataDir,
+    async signUp(username) {
+      const body = { username, password: 'long-enough', invite: await db.createInvite() };
+      return (await (await call('/register', { method: 'POST', body })).json()).token;
+    },
+    stop() {
+      server.close();
+      server.closeAllConnections?.();
+    },
+    remove: () => rm(dataDir, { recursive: true, force: true }),
+  };
+}
+const question = {
+  model: 'claude-opus-5-5',
+  max_tokens: 8000,
+  stream: true,
+  messages: [{ role: 'user', content: 'Hi' }],
+};
+
+test('a name with a dot signs in like any other', async () => {
+  const s = await syncServer();
+  try {
+    const token = await s.signUp('max.muster');
+    const me = await s.call('/me', { token });
+    assert.equal(me.status, 200);
+    assert.equal((await me.json()).username, 'max.muster');
+    assert.equal((await s.call('/snapshot', { token, method: 'PUT', body: { plans: [] } })).status, 200);
+    const again = await s.call('/login', {
+      method: 'POST',
+      body: { username: 'max.muster', password: 'long-enough' },
+    });
+    const second = (await again.json()).token;
+    assert.equal((await s.call('/logout', { token: second, method: 'POST' })).status, 200);
+    assert.equal((await s.call('/me', { token: second })).status, 401, 'the device that signed out is out');
+    assert.equal((await s.call('/me', { token })).status, 200, 'the other one stays in');
+  } finally {
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('one invitation makes one account, however many ask in the same moment', async () => {
+  const s = await syncServer();
+  try {
+    const invite = await s.db.createInvite();
+    const answers = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        s.call('/register', {
+          method: 'POST',
+          body: { username: `racer${i}`, password: 'long-enough', invite },
+          headers: { 'x-forwarded-for': `10.0.0.${i + 1}` },
+        })
+      )
+    );
+    assert.deepEqual(answers.map((a) => a.status).sort(), [200, 403, 403, 403, 403, 403, 403, 403]);
+    assert.equal((await s.db.users()).length, 1);
+    // Invitations made in the same moment all exist afterwards.
+    const codes = await Promise.all(Array.from({ length: 5 }, () => s.db.createInvite()));
+    const open = (await s.db.invites()).filter((i) => !i.usedBy).map((i) => i.code);
+    assert.deepEqual(open.sort(), [...codes].sort());
+  } finally {
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('what is read before anyone signed in stays small, and the server stays up', async () => {
+  const s = await syncServer();
+  try {
+    const big = JSON.stringify({ username: 'anna', password: 'x'.repeat(200000) });
+    assert.equal((await s.call('/login', { method: 'POST', body: big })).status, 413);
+    assert.equal((await s.call('/register', { method: 'POST', body: big })).status, 413);
+    // Sent in pieces, without saying how much is coming.
+    const pieces = new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < 40; i++) controller.enqueue(new TextEncoder().encode('x'.repeat(5000)));
+        controller.close();
+      },
+    });
+    const inPieces = await fetch(`${s.base}/login`, { method: 'POST', body: pieces, duplex: 'half' });
+    assert.equal(inPieces.status, 413);
+    assert.equal((await s.call('/health')).status, 200);
+    // A stranger who keeps sending after the answer is cut off; the server neither waits for the rest nor falls over.
+    const flood = await s
+      .call('/snapshot', { method: 'PUT', body: 'x'.repeat(5e6) })
+      .then((answer) => answer.status)
+      .catch(() => 'cut off');
+    assert.ok(flood === 401 || flood === 'cut off', String(flood));
+    assert.equal((await s.call('/health')).status, 200);
+    // Someone signed in still gets a whole backup and a list of reminders through.
+    const token = await s.signUp('anna');
+    const backup = { photos: 'x'.repeat(300000) };
+    assert.equal((await s.call('/snapshot', { token, method: 'PUT', body: backup })).status, 200);
+    // And an upload that comes too late for the newest state gets told so properly, however large it is.
+    const stale = await s.call('/snapshot', {
+      token,
+      method: 'PUT',
+      body: { photos: 'y'.repeat(5e6) },
+      headers: { 'if-match': '"0000000000000-00000000"' },
+    });
+    assert.equal(stale.status, 412);
+    const alarms = Array.from({ length: 150 }, (_, i) => ({
+      id: `cook-${i}`,
+      at: Date.now() + 3600000,
+      title: 'Kochen',
+      body: 'x'.repeat(200),
+    }));
+    assert.equal(
+      (await s.call('/push/alarms', { token, method: 'POST', body: { set: alarms } })).status,
+      200
+    );
+  } finally {
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('the server decides what Claude may be asked for', async () => {
+  const { aiRequest, costOf } = await import('../sync-server/server.js');
+  const { stream, ...base } = question;
+  assert.equal(aiRequest({ ...base, model: 'claude-fable-5-1' }).error, 'model');
+  assert.equal(aiRequest({ ...base, model: 'constructor' }).error, 'model');
+  assert.equal(aiRequest({ ...base, model: ['claude-opus-5-5'] }).error, 'model');
+  assert.equal(aiRequest({ ...base, max_tokens: undefined }).error, 'request');
+  assert.equal(aiRequest({ ...base, mcp_servers: [] }).error, 'request');
+  assert.equal(aiRequest({ ...base, speed: 'fast' }).error, 'request');
+  assert.equal(aiRequest([base]).error, 'request');
+  const sandbox = { type: 'code_execution_20260521', name: 'code_execution' };
+  assert.equal(aiRequest({ ...base, tools: [sandbox] }).error, 'tool');
+  assert.equal(
+    aiRequest({ ...base, tools: [{ type: ['web_fetch_20260209'], name: 'web_fetch' }] }).error,
+    'tool'
+  );
+  const passed = aiRequest({
+    ...base,
+    max_tokens: 128000,
+    output_config: { effort: 'low' },
+    fallbacks: 'default',
+    tools: [
+      { name: 'own', input_schema: { type: 'object' } },
+      { type: 'web_search_20260209', name: 'web_search', max_uses: 50 },
+      { type: 'web_fetch_20260209', name: 'web_fetch', max_content_tokens: 1e9 },
+    ],
+  }).request;
+  assert.equal(passed.max_tokens, 32000, 'no answer longer than the longest an app needs');
+  assert.deepEqual(
+    passed.tools.map((tool) => tool.max_uses),
+    [undefined, 5, 5]
+  );
+  assert.equal(passed.tools[2].max_content_tokens, 60000, 'a fetched page is read only so far');
+  assert.equal(passed.fallbacks, 'default');
+  assert.deepEqual(passed.output_config, { effort: 'low' });
+  // What a request may cost is known before it runs: the longest answer, everything Claude has to read, and what
+  // its web tools may bring. A picture counts the same whatever its size in bytes.
+  const plain = aiRequest(base).estimate;
+  assert.ok(
+    plain.dollars > 0.16 && plain.dollars < 0.161,
+    `8000 tokens of answer and a short question: ${plain.dollars}`
+  );
+  const picture = {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/jpeg', data: 'A'.repeat(3e6) },
+  };
+  const seen = aiRequest({
+    ...base,
+    messages: [{ role: 'user', content: [picture, { type: 'text', text: 'Hm?' }] }],
+  });
+  assert.ok(seen.estimate.inputTokens > 5000 && seen.estimate.inputTokens < 5100);
+  const long = aiRequest({ ...base, system: 'x'.repeat(300000) }).estimate;
+  assert.ok(long.inputTokens > 100000 && long.inputTokens < 100100);
+  const fetching = aiRequest({
+    ...base,
+    tools: [{ type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 1 }],
+  });
+  assert.ok(fetching.estimate.dollars > plain.dollars + 0.24, 'the page it may fetch is part of the guess');
+  // A cache entry kept for an hour costs more to write than the usual one.
+  const hourly = { cache_creation_input_tokens: 1e6, cache_creation: { ephemeral_1h_input_tokens: 400000 } };
+  assert.equal(costOf(hourly), 6.2);
+
+  const claude = await fakeAnthropic();
+  const s = await syncServer({ anthropicUrl: claude.url });
+  try {
+    const token = await s.signUp('anna');
+    await s.db.saveAi({ key: 'sk-ant-api-good' });
+    const ask = (body, headers) => s.call('/ai/messages', { token, method: 'POST', body, headers });
+    const wrong = await ask({ ...question, model: 'claude-fable-5-1' });
+    assert.equal(wrong.status, 400);
+    assert.deepEqual(await wrong.json(), { error: 'model' });
+    assert.equal(claude.calls.length, 0, 'Claude is not called for it');
+    const fine = await ask(
+      { ...question, max_tokens: 128000 },
+      {
+        'anthropic-beta': 'server-side-fallback-2026-07-01, fast-mode-2026-02-01',
+        'anthropic-version': 'newest',
+      }
+    );
+    assert.equal(fine.status, 200);
+    await fine.text();
+    const sent = claude.calls.at(-1);
+    assert.equal(JSON.parse(sent.body).max_tokens, 32000);
+    assert.equal(sent.beta, 'server-side-fallback-2026-07-01', 'only the extras the apps use pass');
+    assert.equal(sent.version, '2026-10-21');
+  } finally {
+    s.stop();
+    claude.server.close();
+    claude.server.closeAllConnections?.();
+    await s.remove();
+  }
+});
+
+test('requests sent in the same moment cannot spend past the budget, and every answer is counted', async () => {
+  const claude = await fakeAnthropic({ delay: 150 });
+  const s = await syncServer({ anthropicUrl: claude.url });
+  try {
+    const token = await s.signUp('anna');
+    await s.db.saveAi({ key: 'sk-ant-api-good', defaultBudget: 2 });
+    const ask = () =>
+      s.call('/ai/messages', { token, method: 'POST', body: { ...question, max_tokens: 32000 } });
+    const answers = await Promise.all(Array.from({ length: 10 }, ask));
+    await Promise.all(answers.map((answer) => answer.text()));
+    // Each may cost up to 0.64 $, and the budget has to cover all that are on their way: three fit into 2 $, the
+    // others are told to wait.
+    assert.deepEqual(answers.map((a) => a.status).sort(), [200, 200, 200, 429, 429, 429, 429, 429, 429, 429]);
+    assert.equal(claude.calls.length, 3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const used = s.db.usedThisMonth(await s.db.account('anna'));
+    assert.equal(Math.round(used * 100) / 100, 1.8, 'all three answers are on the bill');
+    // What is left no longer covers a request of this size, and the answer says so instead of "wait".
+    const next = await ask();
+    assert.equal(next.status, 402);
+    assert.equal((await next.json()).error, 'budget');
+    assert.equal(claude.calls.length, 3);
+  } finally {
+    s.stop();
+    claude.server.close();
+    claude.server.closeAllConnections?.();
+    await s.remove();
+  }
+});
+
+test('an answer that breaks off is still paid for, and holds nothing back afterwards', async () => {
+  const { costOf } = await import('../sync-server/server.js');
+  const claude = await fakeAnthropic({ cut: true });
+  const s = await syncServer({ anthropicUrl: claude.url });
+  try {
+    const token = await s.signUp('anna');
+    await s.db.saveAi({ key: 'sk-ant-api-good', defaultBudget: 100 });
+    const ask = () => s.call('/ai/messages', { token, method: 'POST', body: question });
+    // More than may run side by side: each one has to give its place back when it breaks off.
+    for (let i = 0; i < 6; i++) {
+      const reply = await ask();
+      assert.equal(reply.status, 200);
+      await reply.text().catch(() => '');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+    // "Hallo vom Server." came through: 17 characters, taken as 6 tokens on top of what was read.
+    const each = costOf({ input_tokens: 100000, output_tokens: 6 });
+    const used = s.db.usedThisMonth(await s.db.account('anna'));
+    assert.equal(Math.round(used * 1e6), Math.round(each * 6 * 1e6));
+  } finally {
+    s.stop();
+    claude.server.close();
+    claude.server.closeAllConnections?.();
+    await s.remove();
+  }
+  // An answer that ends before it says a word: Claude has still read the request, and that much is counted.
+  const silent = await fakeAnthropic({ cut: 'early' });
+  const t = await syncServer({ anthropicUrl: silent.url });
+  try {
+    const token = await t.signUp('anna');
+    await t.db.saveAi({ key: 'sk-ant-api-good' });
+    const reply = await t.call('/ai/messages', {
+      token,
+      method: 'POST',
+      body: { ...question, system: 'x'.repeat(30000) },
+    });
+    await reply.text().catch(() => '');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const used = t.db.usedThisMonth(await t.db.account('anna'));
+    assert.ok(used > 0.04 && used < 0.041, `about 10,000 tokens read: ${used}`);
+  } finally {
+    t.stop();
+    silent.server.close();
+    silent.server.closeAllConnections?.();
+    await t.remove();
+  }
+});
+
+test('wrong passwords are remembered across a restart', async () => {
+  let clock = Date.UTC(2026, 10, 16, 12);
+  const first = await syncServer({ now: () => clock });
+  let second;
+  // Every try comes from another address, so only the count per account can stop it.
+  const login = (s, password, n) =>
+    s.call('/login', {
+      method: 'POST',
+      body: { username: 'anna', password },
+      headers: { 'x-forwarded-for': `10.1.0.${n + 1}` },
+    });
+  try {
+    await first.signUp('anna');
+    for (let n = 0; n < 20; n++) assert.equal((await login(first, 'wrong-guess', n)).status, 401);
+    assert.equal((await login(first, 'long-enough', 50)).status, 429);
+    first.stop();
+    second = await syncServer({ now: () => clock, dataDir: first.dataDir });
+    assert.equal((await login(second, 'long-enough', 51)).status, 429, 'a restart is no fresh start');
+    clock += 61 * 60 * 1000;
+    assert.equal((await login(second, 'long-enough', 52)).status, 200);
+  } finally {
+    first.stop();
+    second?.stop();
+    await first.remove();
   }
 });
 

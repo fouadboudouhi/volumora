@@ -2723,7 +2723,9 @@ test('the admin stores the Claude key, sets budgets and invites; everyone else j
     // The second answer uses the budget up, the third is refused before Claude is asked.
     await page.fill('#aiInput', 'Noch mal');
     await page.click('#aiSend');
+    // Until the second answer is there and on the bill; the bubble alone appears before Claude was even asked.
     await page.waitForFunction(() => document.querySelectorAll('.chat-assistant').length >= 2);
+    await page.waitForFunction(async () => (await import('/src/sync.js')).syncConfig().ai.used >= 2);
     const calls = claudeCalls.length;
     await page.fill('#aiInput', 'Und noch mal');
     await page.click('#aiSend');
