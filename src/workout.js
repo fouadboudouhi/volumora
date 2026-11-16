@@ -367,13 +367,14 @@ export function recentEntries(ex, limit = 3, history = getHistory()) {
   return rows;
 }
 const bestScoreOf = (entry) => Math.max(0, ...entry.sets.map((s) => setScore(s, entryTrackType(entry))));
-// All the work of the logged sets: the volume for weight × reps, otherwise the summed reps, seconds or kilometres.
+// The work of the logged sets: for weight × reps the volume at the heaviest weight of the session, so lighter
+// back-off or drop sets neither hide nor fake progress; otherwise the summed reps, seconds or kilometres.
 function workOf(entry) {
   const type = entryTrackType(entry);
-  return loggedSets(entry).reduce(
-    (sum, s) => sum + (type === 'weight_reps' ? setVolume(s) : setScore(s, type)),
-    0
-  );
+  const sets = loggedSets(entry);
+  if (type !== 'weight_reps') return sets.reduce((sum, s) => sum + setScore(s, type), 0);
+  const top = Math.max(0, ...sets.map((s) => number(s.weight)));
+  return sets.filter((s) => number(s.weight) >= top).reduce((sum, s) => sum + setVolume(s), 0);
 }
 
 // Three sessions in a row without a better estimated 1RM and without more work, close to the all-time best: time for

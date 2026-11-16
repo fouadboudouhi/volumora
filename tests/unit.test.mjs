@@ -833,6 +833,58 @@ test('progression: stall detection, per-exercise increment and 1RM reps table', 
     multi('a', '2026-02-17', [10, 9, 8]),
   ];
   assert.equal(stalled(ex, sameWork), true, 'the same reps in another order are no progress');
+  // The work counts at the heaviest weight: a lighter back-off set must neither hide double progression when it is
+  // left out nor fake progress when it is added.
+  const mixed = (id, day, list) => ({
+    ...session(id, day, 60, 10),
+    entries: [
+      {
+        ...session().entries[0],
+        sets: list.map(([w, r]) => ({ weight: String(w), reps: String(r), done: true, type: 'normal' })),
+      },
+    ],
+  });
+  const backOffDropped = [
+    mixed('c', '2026-03-03', [
+      [60, 10],
+      [60, 10],
+      [60, 10],
+    ]),
+    mixed('b', '2026-02-24', [
+      [60, 10],
+      [60, 9],
+      [60, 8],
+      [40, 5],
+    ]),
+    mixed('a', '2026-02-17', [
+      [60, 10],
+      [60, 8],
+      [60, 7],
+      [40, 10],
+    ]),
+  ];
+  assert.equal(stalled(ex, backOffDropped), false, 'more reps at 60 kg although the back-off set went');
+  assert.notEqual(suggestion(ex, backOffDropped, today).kind, 'stall');
+  const backOffAdded = [
+    mixed('c', '2026-03-03', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+      [60, 10],
+    ]),
+    mixed('b', '2026-02-24', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+      [60, 10],
+    ]),
+    mixed('a', '2026-02-17', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+    ]),
+  ];
+  assert.equal(stalled(ex, backOffAdded), true, 'an added lighter set is no progress at 100 kg');
   const { deloadHint } = await import('../src/deload.js');
   const across = (list) =>
     list.map((s) => ({
