@@ -204,6 +204,7 @@ export async function importCsvFile(input) {
   });
   if (!ok) return;
   const result = importParsed(parsed);
+  if (!result.saved) return toast(t('backup.csvFailed'), { duration: 9000 });
   toast(
     [
       plural(result.added, 'backup.csvImported'),

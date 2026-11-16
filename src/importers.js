@@ -538,9 +538,15 @@ export function mergeImport(history, customs, parsed) {
   };
 }
 
+// `saved` is false when the device storage refused the history: the custom exercises written for it are taken
+// back then, so a failed import leaves nothing behind and the caller can say so instead of reporting a count.
 export function importParsed(parsed) {
-  const result = mergeImport(getHistory(), getCustomExercises(), parsed);
-  if (result.created) saveCustomExercises(result.customs);
-  if (result.added) saveHistory(result.history);
-  return result;
+  const customs = getCustomExercises();
+  const result = mergeImport(getHistory(), customs, parsed);
+  if (result.created && !saveCustomExercises(result.customs)) return { ...result, saved: false };
+  if (result.added && !saveHistory(result.history)) {
+    if (result.created) saveCustomExercises(customs);
+    return { ...result, saved: false };
+  }
+  return { ...result, saved: true };
 }

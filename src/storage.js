@@ -63,12 +63,16 @@ let changeListener = null;
 export const onDataChange = (listener) => {
   changeListener = listener;
 };
+// Counts refused writes, so a step made of several saves can tell afterwards whether all of them landed.
+let failedWrites = 0;
+export const writeFailures = () => failedWrites;
 export const write = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     changeListener?.(key);
     return true;
   } catch (err) {
+    failedWrites++;
     console.error('Speichern fehlgeschlagen', err);
     toast(t('storage.full'), { duration: 9000 });
     return false;
@@ -94,7 +98,7 @@ export function persistPlan(plan) {
   const index = data.items.findIndex((x) => x.id === plan.id);
   if (index < 0) data.items.push(plan);
   else data.items[index] = plan;
-  savePlans(data);
+  return savePlans(data);
 }
 
 export const getHistory = () => read(LS.history, []);
@@ -118,8 +122,7 @@ export function saveCustomExercise(record) {
   const index = list.findIndex((x) => x.id === record.id);
   if (index < 0) list.push(record);
   else list[index] = record;
-  saveCustomExercises(list);
-  return record;
+  return saveCustomExercises(list) ? record : null;
 }
 export function removeCustomExercise(id) {
   const list = getCustomExercises();

@@ -394,6 +394,7 @@ const ui = {
   'backup.csvImported.other': '{n} workouts imported.',
   'backup.csvSkipped.one': '{n} was already there.',
   'backup.csvSkipped.other': '{n} were already there.',
+  'backup.csvFailed': 'Import not saved: the storage on this device is full. Nothing was added.',
   'backup.importedPhotosFailed': 'Backup restored. {n} photo(s) could not be stored.',
   'settings.title': 'Settings',
   'settings.training': 'Training',

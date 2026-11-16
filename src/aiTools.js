@@ -21,6 +21,7 @@ import {
   saveHistory,
   savePlans,
   saveSettings,
+  writeFailures,
 } from './storage.js';
 import { applyTheme } from './theme.js';
 import { fromDisplay, inUnit, toDisplay, unit } from './units.js';
@@ -874,6 +875,15 @@ export async function runTool(name, input, { confirm }) {
     const result = LOOKUPS[name](values);
     return result?.error ? result : { result };
   }
-  if (CHANGES[name]) return CHANGES[name](values, confirm);
+  if (CHANGES[name]) {
+    const failures = writeFailures();
+    const outcome = await CHANGES[name](values, confirm);
+    // A change the device refused to store must not reach Claude as done, or it tells the person it was saved.
+    if (writeFailures() > failures)
+      return {
+        error: 'The change could not be stored: the storage on this device is full. Tell the person.',
+      };
+    return outcome;
+  }
   return { error: `Unknown tool ${name}.` };
 }

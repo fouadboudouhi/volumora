@@ -397,6 +397,8 @@ const ui = {
   'backup.csvImported.other': '{n} Trainings importiert.',
   'backup.csvSkipped.one': '{n} war schon vorhanden.',
   'backup.csvSkipped.other': '{n} waren schon vorhanden.',
+  'backup.csvFailed':
+    'Import nicht gespeichert: Der Speicher auf diesem Gerät ist voll. Es wurde nichts übernommen.',
   'backup.importedPhotosFailed': 'Backup importiert. {n} Foto(s) konnten nicht gespeichert werden.',
   'settings.title': 'Einstellungen',
   'settings.training': 'Training',
