@@ -45,15 +45,20 @@ const MAX_OUTPUT_TOKENS = 32000;
 const AI_BETAS = ['server-side-fallback-2026-07-01', 'server-side-fallback-2026-06-01'];
 const SERVER_TOOL = /^web_(search|fetch)_\d{8}$/;
 const MAX_TOOL_USES = 5;
+// A page Claude fetches is read as input and paid for; this is plenty for a recipe.
+const MAX_FETCH_TOKENS = 60000;
 const REFUSED_FIELDS = ['mcp_servers', 'container', 'speed', 'service_tier', 'inference_geo'];
+// For guessing what a request may cost before it runs: a picture, and what one web search brings back.
+const IMAGE_TOKENS = 5000;
+const SEARCH_TOKENS = 10000;
 // Requests of one account that may be on their way to Claude at the same time.
 const MAX_AI_PARALLEL = 4;
 // Sign-in, push and admin calls are a few hundred bytes. Only snapshots and Claude requests carry weight, and those
-// are read only once it is known who sends them.
+// are read only once it is known who sends them. A Claude request holds a conversation and at most a few pictures.
 const SMALL_BODY = 16 * 1024;
 const ALARM_BODY = 256 * 1024;
-const AI_BODY = 16 * 1024 * 1024;
-// How much of a refused upload is still read (and dropped) before the connection is cut.
+const AI_BODY = 8 * 1024 * 1024;
+// How much a stranger may still send once the answer is out (it is dropped) before the connection is cut.
 const UNREAD_BYTES = 1024 * 1024;
 const DEFAULT_BUDGET = 5;
 // Other apps of the same person get their own place, so they can never overwrite each other's data.
@@ -82,41 +87,61 @@ export const costOf = (usage = {}, price = PRICE) => {
   );
 };
 
-// The request as it goes on to Claude, or what is wrong with it.
+// Roughly how many tokens something holds: text by its length, a picture at a flat figure whatever its bytes.
+function tokensIn(value) {
+  if (typeof value === 'string') return value.length / 3;
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + tokensIn(item), 0);
+  if (!value || typeof value !== 'object') return 1;
+  if (value.type === 'image' && value.source?.type === 'base64') return IMAGE_TOKENS;
+  return Object.values(value).reduce((sum, item) => sum + tokensIn(item), 0);
+}
+
+// The request as it goes on to Claude with a guess at what it may cost, or what is wrong with it. The guess is the
+// longest answer allowed plus everything Claude has to read: the request itself and what its web tools may bring.
 export function aiRequest(asked) {
   if (!asked || typeof asked !== 'object' || Array.isArray(asked)) return { error: 'request' };
-  const price = Object.hasOwn(MODELS, asked.model) ? MODELS[asked.model] : null;
+  const price = typeof asked.model === 'string' && Object.hasOwn(MODELS, asked.model) ? MODELS[asked.model] : null;
   if (!price) return { error: 'model' };
   const length = Number(asked.max_tokens);
   if (!Number.isInteger(length) || length < 1) return { error: 'request' };
   if (REFUSED_FIELDS.some((field) => field in asked)) return { error: 'request' };
   if (asked.tools !== undefined && !Array.isArray(asked.tools)) return { error: 'request' };
   const tools = [];
+  let fromTheWeb = 0;
+  let searches = 0;
   for (const tool of asked.tools || []) {
     if (!tool || typeof tool !== 'object') return { error: 'request' };
     // The apps' own tools run on the phone and cost nothing extra; Claude's own tools are billed per use.
     if (tool.type === undefined || tool.type === 'custom') tools.push(tool);
-    else if (!SERVER_TOOL.test(tool.type)) return { error: 'tool' };
+    else if (typeof tool.type !== 'string' || !SERVER_TOOL.test(tool.type)) return { error: 'tool' };
     else {
-      const uses = Number(tool.max_uses);
-      tools.push({ ...tool, max_uses: uses >= 1 ? Math.min(Math.floor(uses), MAX_TOOL_USES) : MAX_TOOL_USES });
+      const given = Number(tool.max_uses);
+      const uses = given >= 1 ? Math.min(Math.floor(given), MAX_TOOL_USES) : MAX_TOOL_USES;
+      if (tool.type.startsWith('web_fetch')) {
+        const page = Number(tool.max_content_tokens);
+        const size = page >= 1 ? Math.min(Math.floor(page), MAX_FETCH_TOKENS) : MAX_FETCH_TOKENS;
+        tools.push({ ...tool, max_uses: uses, max_content_tokens: size });
+        fromTheWeb += uses * size;
+      } else {
+        tools.push({ ...tool, max_uses: uses });
+        fromTheWeb += uses * SEARCH_TOKENS;
+        searches += uses;
+      }
     }
   }
-  return {
-    price,
-    request: {
-      ...asked,
-      max_tokens: Math.min(length, MAX_OUTPUT_TOKENS),
-      ...(asked.tools ? { tools } : {}),
-    },
-  };
+  const request = { ...asked, max_tokens: Math.min(length, MAX_OUTPUT_TOKENS), ...(asked.tools ? { tools } : {}) };
+  const inputTokens = Math.ceil(tokensIn([request.system, request.tools, request.messages]));
+  const dollars =
+    ((inputTokens + fromTheWeb) * price.input + request.max_tokens * price.output) / 1e6 + searches * price.search;
+  return { price, request, estimate: { inputTokens, dollars } };
 }
 
-// Reads what an answer costs while it passes through. An answer that breaks off never says how long it got, so its
-// length is then estimated from the text that came (hidden thinking is not in it, so this is the lower end).
+// Reads what an answer costs while it passes through; null when it said nothing about that at all. An answer that
+// breaks off never says how long it got, so its length is then estimated from the text that came (hidden thinking
+// is not in it, so this is the lower end).
 function usageMeter(streamed) {
   let rest = '';
-  let usage = {};
+  let usage = null;
   let written = 0;
   let ended = false;
   const read = (line) => {
@@ -146,13 +171,13 @@ function usageMeter(streamed) {
     usage() {
       if (!streamed) {
         try {
-          return JSON.parse(rest).usage || {};
+          return JSON.parse(rest).usage || null;
         } catch {
-          return {};
+          return null;
         }
       }
       read(rest);
-      if (ended) return usage;
+      if (ended || !usage) return usage;
       return { ...usage, output_tokens: Math.max(usage.output_tokens || 0, Math.ceil(written / 3)) };
     },
   };
@@ -496,9 +521,21 @@ export function createSyncServer({
           vary: 'origin',
         }
       : {};
+    // How much of an upload is still let through (and dropped) once the answer is out. Little for a stranger, a
+    // whole backup for someone signed in, whose app should get its answer rather than a broken connection.
+    let unreadLimit = UNREAD_BYTES;
+    let dropping = false;
     const send = (status, body = null, headers = {}) => {
       res.writeHead(status, { ...cors, 'cache-control': 'no-store', ...headers });
       res.end(body);
+      if (req.complete || dropping) return;
+      dropping = true;
+      let unread = 0;
+      req.on('error', () => {});
+      req.on('data', (chunk) => {
+        unread += chunk.length;
+        if (unread > unreadLimit) req.destroy();
+      });
     };
     const json = (status, value, headers) =>
       send(status, JSON.stringify(value), { 'content-type': 'application/json', ...headers });
@@ -556,91 +593,97 @@ export function createSyncServer({
       const who = await session(token);
       if (!who) return failure(401, 'session');
       failures.delete(ip);
+      unreadLimit = maxBytes;
       const { name } = who;
       if (req.method === 'GET' && pathname === '/v1/me')
         return json(200, { username: name, admin: !!who.data.admin, ai: await aiState(who.data) });
       if (req.method === 'POST' && pathname === '/v1/ai/messages') {
         const ai = await db.ai();
         if (!ai.key) return json(503, { error: 'no ai' });
-        const { price, request, error } = aiRequest(JSON.parse((await readBody(req, AI_BODY, true)).toString('utf8')));
-        if (error) return json(400, { error });
-        const body = JSON.stringify(request);
-        // The most this request can cost: the longest answer it may get, and its own size read as text (a picture
-        // counts for far fewer tokens than its bytes, hence the cap).
-        const atMost = (request.max_tokens * price.output + Math.min(body.length / 3, 150000) * price.input) / 1e6;
-        // Looked at one request at a time, with the account read fresh. What is still on its way to Claude counts as
-        // spent already, or many requests sent in the same moment would all pass on the same old figure.
-        const refused = await db.exclusive(name, async () => {
-          const data = (await db.account(name)) || who.data;
-          const budget = db.budgetOf(data, ai);
-          const used = db.usedThisMonth(data, now());
-          const running = aiRunning.get(name) || { count: 0, dollars: 0 };
-          if (used >= budget) return [402, { error: 'budget', used, budget }];
-          if (running.count >= MAX_AI_PARALLEL || used + running.dollars >= budget) return [429, { error: 'busy' }];
-          aiRunning.set(name, { count: running.count + 1, dollars: running.dollars + atMost });
-          return null;
-        });
-        if (refused) return json(...refused);
-        const done = () => {
+        // A place is taken before anything of the request is read, so one account cannot make the server hold many
+        // large requests at once. `reserved` is what this request may cost, once that is known.
+        const places = aiRunning.get(name) || { count: 0, dollars: 0 };
+        if (places.count >= MAX_AI_PARALLEL) return json(429, { error: 'busy' });
+        aiRunning.set(name, { count: places.count + 1, dollars: places.dollars });
+        let reserved = 0;
+        try {
+          const asked = JSON.parse((await readBody(req, AI_BODY, true)).toString('utf8'));
+          const { price, request, estimate, error } = aiRequest(asked);
+          if (error) return json(400, { error });
+          // Looked at one request at a time, with the account read fresh. The budget has to cover what this request
+          // may cost, and what is still on its way to Claude counts as spent already: otherwise many requests sent
+          // in the same moment would all pass on the same old figure.
+          const refused = await db.exclusive(name, async () => {
+            const data = (await db.account(name)) || who.data;
+            const budget = db.budgetOf(data, ai);
+            const used = db.usedThisMonth(data, now());
+            const running = aiRunning.get(name);
+            if (used >= budget || used + estimate.dollars > budget) return [402, { error: 'budget', used, budget }];
+            if (used + running.dollars + estimate.dollars > budget) return [429, { error: 'busy' }];
+            reserved = estimate.dollars;
+            aiRunning.set(name, { count: running.count, dollars: running.dollars + reserved });
+            return null;
+          });
+          if (refused) return json(...refused);
+          // The caller going away ends the request at Claude as well, so nobody pays for an answer no one reads.
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), AI_TIMEOUT);
+          res.on('close', () => {
+            if (!res.writableFinished) controller.abort();
+          });
+          const version = String(req.headers['anthropic-version'] || '');
+          const betas = String(req.headers['anthropic-beta'] || '')
+            .split(',')
+            .map((beta) => beta.trim())
+            .filter((beta) => AI_BETAS.includes(beta));
+          let upstream;
+          try {
+            upstream = await fetch(`${anthropicUrl}/v1/messages`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': ai.key,
+                'anthropic-version': /^\d{4}-\d{2}-\d{2}$/.test(version) ? version : ANTHROPIC_VERSION,
+                ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}),
+              },
+              body: JSON.stringify(request),
+              signal: controller.signal,
+            });
+          } catch {
+            clearTimeout(timer);
+            return json(502, { error: 'anthropic' });
+          }
+          const kind = upstream.headers.get('content-type') || 'application/json';
+          res.writeHead(upstream.status, { ...cors, 'cache-control': 'no-store', 'content-type': kind });
+          // Streamed through unchanged; the usage figures in the events say what this answer cost.
+          const decoder = new TextDecoder();
+          const meter = usageMeter(kind.includes('text/event-stream'));
+          try {
+            for await (const chunk of upstream.body) {
+              if (!res.destroyed) res.write(chunk);
+              meter.feed(decoder.decode(chunk, { stream: true }));
+            }
+          } catch {
+            // The client or Claude went away; what came through was still paid for.
+          } finally {
+            clearTimeout(timer);
+          }
+          // Counted before the answer ends, so whoever asks for the budget right after sees this answer in it. An
+          // answer that broke off before it said anything about its cost was still read by Claude: that much is
+          // counted. A cost that cannot be written down must not take the answer, or the server, with it.
+          try {
+            const usage = meter.usage() || { input_tokens: estimate.inputTokens };
+            if (upstream.ok) await db.addUsage(name, costOf(usage, price), now());
+          } catch (err) {
+            console.error(err);
+          }
+          res.end();
+          return;
+        } finally {
           const running = aiRunning.get(name);
           if (!running || running.count <= 1) aiRunning.delete(name);
-          else aiRunning.set(name, { count: running.count - 1, dollars: Math.max(0, running.dollars - atMost) });
-        };
-        // The caller going away ends the request at Claude as well, so nobody pays for an answer no one reads.
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), AI_TIMEOUT);
-        res.on('close', () => {
-          if (!res.writableFinished) controller.abort();
-        });
-        const version = String(req.headers['anthropic-version'] || '');
-        const betas = String(req.headers['anthropic-beta'] || '')
-          .split(',')
-          .map((beta) => beta.trim())
-          .filter((beta) => AI_BETAS.includes(beta));
-        let upstream;
-        try {
-          upstream = await fetch(`${anthropicUrl}/v1/messages`, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': ai.key,
-              'anthropic-version': /^\d{4}-\d{2}-\d{2}$/.test(version) ? version : ANTHROPIC_VERSION,
-              ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}),
-            },
-            body,
-            signal: controller.signal,
-          });
-        } catch {
-          clearTimeout(timer);
-          done();
-          return json(502, { error: 'anthropic' });
+          else aiRunning.set(name, { count: running.count - 1, dollars: Math.max(0, running.dollars - reserved) });
         }
-        const kind = upstream.headers.get('content-type') || 'application/json';
-        res.writeHead(upstream.status, { ...cors, 'cache-control': 'no-store', 'content-type': kind });
-        // Streamed through unchanged; the usage figures in the events say what this answer cost.
-        const decoder = new TextDecoder();
-        const meter = usageMeter(kind.includes('text/event-stream'));
-        try {
-          for await (const chunk of upstream.body) {
-            if (!res.destroyed) res.write(chunk);
-            meter.feed(decoder.decode(chunk, { stream: true }));
-          }
-        } catch {
-          // The client or Claude went away; what came through was still paid for.
-        } finally {
-          clearTimeout(timer);
-        }
-        // Counted before the answer ends, so whoever asks for the budget right after sees this answer in it. A cost
-        // that cannot be written down must not take the answer, or the server, with it.
-        try {
-          if (upstream.ok) await db.addUsage(name, costOf(meter.usage(), price), now());
-        } catch (err) {
-          console.error(err);
-        } finally {
-          done();
-        }
-        res.end();
-        return;
       }
 
       if (pathname.startsWith('/v1/admin/')) {
@@ -816,17 +859,7 @@ export function createSyncServer({
         return res.destroy();
       }
       if (err instanceof SyntaxError) return json(400, { error: 'not json' });
-      if (err.status === 413) {
-        // The rest of the upload is let through unkept, so an honest mistake still gets its answer instead of a
-        // broken connection. Only so much of it, though: after that the line is cut.
-        let unread = 0;
-        req.on('error', () => {});
-        req.on('data', (chunk) => {
-          unread += chunk.length;
-          if (unread > UNREAD_BYTES) req.destroy();
-        });
-        return json(413, { error: 'too large' });
-      }
+      if (err.status === 413) return json(413, { error: 'too large' });
       console.error(err);
       return json(500, { error: 'server error' });
     }
