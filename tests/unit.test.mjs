@@ -780,6 +780,71 @@ test('weekly stats: sets per group, weekly volume, frequency, record timeline, b
   assert.equal(combo.weight[0].value, 80, 'a measurement within ten days counts for earlier sessions too');
 });
 
+test('analytics charts follow the chosen range and turn many sessions into weeks instead of cutting them off', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const { volumeSeries, strengthChartSeries } = await import('../src/charts.js');
+  const { saveHistory } = await import('../src/storage.js');
+  const { startOfWeek } = await import('../src/stats.js');
+  // Sixty sessions, one every three days, newest first like the stored history; the weight rises over time.
+  const history = Array.from({ length: 60 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - 3 * i);
+    const day = dayKey(d);
+    const weight = 100 - i;
+    return {
+      id: `s${i}`,
+      day,
+      finishedAt: `${day}T10:00:00.000Z`,
+      volume: weight * 10,
+      entries: [
+        {
+          exerciseId: 'x',
+          libraryId: '0025',
+          trackType: 'weight_reps',
+          sets: [{ weight: String(weight), reps: '1', done: true, type: 'normal' }],
+        },
+      ],
+    };
+  });
+  saveHistory(history);
+  const month = volumeSeries('4w');
+  assert.equal(month.length, 10, 'four weeks: one point per session');
+  assert.ok(month.every((p) => !p.label.startsWith('Woche')));
+  assert.equal(month.at(-1).value, 1000);
+  const quarter = volumeSeries('3m');
+  assert.ok(
+    quarter.length >= 13 && quarter.length <= 15,
+    `three months: one point per week, not ${quarter.length}`
+  );
+  assert.ok(quarter.every((p) => p.label.startsWith('Woche ab')));
+  const oldest = history.filter((h) => h.day >= dayKey(new Date(Date.now() - 91 * 86400000))).at(-1);
+  assert.equal(
+    quarter[0].label,
+    `Woche ab ${fmtDate(startOfWeek(new Date(`${oldest.day}T12:00:00`)))}`,
+    'the chart starts where the range starts'
+  );
+  const everything = volumeSeries('all');
+  assert.ok(everything.length > quarter.length, 'a longer range shows more');
+  const strengthMonth = strengthChartSeries('0025', '4w');
+  assert.equal(strengthMonth.points.length, 10, 'the strength chart follows the range too');
+  assert.equal(strengthMonth.points.at(-1).value, 103, 'estimated 1RM of the newest 100 kg × 1');
+  const strengthAll = strengthChartSeries('0025', 'all').points;
+  assert.ok(strengthAll.length > strengthChartSeries('0025', '3m').points.length);
+  assert.ok(
+    strengthAll.every((p, i) => !i || p.value > strengthAll[i - 1].value),
+    'a week shows its best'
+  );
+  saveHistory([]);
+});
+
 test('progression: stall detection, per-exercise increment and 1RM reps table', async () => {
   const { suggestion, stalled, repsAtPercent } = await import('../src/workout.js');
   const session = (id, day, weight, reps) => ({

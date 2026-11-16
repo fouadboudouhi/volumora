@@ -313,6 +313,7 @@ const ui = {
   'analytics.bodyStrengthAria': 'Geschätztes Maximalgewicht der gewählten Übung und Körpergewicht',
   'analytics.bodyStrengthHint': 'Durchgezogen: Kraft der gewählten Übung. Gestrichelt: Körpergewicht.',
   'analytics.bodyStrengthEmpty': 'Ab zwei Trainings mit dieser Übung siehst du hier den Verlauf.',
+  'analytics.weekOf': 'Woche ab {date}',
   'analytics.records': 'Bestwerte-Zeitleiste',
   'session.title': 'Training',
   'session.volume': 'Volumen',

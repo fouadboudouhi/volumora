@@ -310,6 +310,7 @@ const ui = {
   'analytics.bodyStrengthAria': 'Estimated one-rep max of the selected exercise and body weight',
   'analytics.bodyStrengthHint': 'Solid: strength of the selected exercise. Dashed: body weight.',
   'analytics.bodyStrengthEmpty': 'From two workouts with this exercise, you will see the trend here.',
+  'analytics.weekOf': 'Week of {date}',
   'analytics.records': 'Record timeline',
   'session.title': 'Workout',
   'session.volume': 'Volume',

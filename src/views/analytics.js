@@ -176,7 +176,8 @@ export function view() {
     ${weeklySetsSection()}
     <section class="chart-section"><h2>${t('analytics.weeklyVolume')}</h2><canvas id="weeklyVolumeChart" height="180" role="img" aria-label="${t('analytics.weeklyVolumeAria')}"></canvas></section>
     <section class="chart-section"><h2>${t('analytics.frequency')}</h2><canvas id="frequencyChart" height="160" role="img" aria-label="${t('analytics.frequencyAria')}"></canvas></section>`,
-    strength: `${recordsLink}
+    strength: `${rangeControl}
+    ${recordsLink}
     ${trendSection(all, exercises, selected)}
     ${hasBody ? `<section class="chart-section"><h2>${esc(t('analytics.bodyStrengthOf', { name: exercises.get(selected) || '' }))}</h2><canvas id="bodyStrengthChart" height="200" role="img" aria-label="${t('analytics.bodyStrengthAria')}"></canvas><p class="muted analytics-hint" id="bodyStrengthHint">${t('analytics.bodyStrengthHint')}</p><p class="muted analytics-hint" id="bodyStrengthEmpty" hidden>${t('analytics.bodyStrengthEmpty')}</p></section>` : ''}`,
     sessions: `${rangeControl}
