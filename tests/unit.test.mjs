@@ -433,6 +433,50 @@ test('first-run, sign-in and assistant hints do not promise an app without accou
   }
 });
 
+// The chat and memory are part of every upload (sync.js), and the assistant usually runs on the server's key.
+test('the privacy text says what goes to the server and to Anthropic, and never the opposite', () => {
+  const stale = [
+    /Was er sich merkt, bleibt auf diesem Gerät|What it remembers stays on this device/,
+    /Der Chat bleibt auf diesem Gerät|The chat stays on this device/,
+    /nur aktiv, wenn du einen eigenen|only active once you enter your own/,
+    /erzeugt dein Gerät lokal|created locally by your device/,
+  ];
+  const facts = {
+    de: [
+      /Einladungscode/,
+      /Chat/,
+      /Gemerkte/,
+      /Monatsbudget/,
+      /Push/,
+      /bleibt.*Konto|Konto.*bleibt/,
+      /Konto löschen/,
+    ],
+    en: [
+      /invitation code/,
+      /chat/,
+      /remembers/,
+      /monthly budget/,
+      /push/,
+      /account stays/,
+      /delete an account/,
+    ],
+  };
+  for (const [name, dict] of [
+    ['de', de],
+    ['en', en],
+  ]) {
+    const text = dict['legal.privacyText'];
+    for (const pattern of stale) assert.doesNotMatch(text, pattern, `${name}: ${pattern}`);
+    for (const pattern of facts[name]) assert.match(text, pattern, `${name}: ${pattern}`);
+    // The chat is uploaded with everything else, so nothing "only" goes to Anthropic.
+    assert.doesNotMatch(
+      dict['ai.setupSent'],
+      /nur an Anthropic|only goes to Anthropic/,
+      `ai.setupSent in ${name}`
+    );
+  }
+});
+
 test('exercise names resolve per language for library, built-in and custom exercises', () => {
   setLanguage('de');
   assert.equal(exerciseName({ id: 'x', libraryId: '0025', name: 'alt' }), 'Bankdrücken mit Langhantel');

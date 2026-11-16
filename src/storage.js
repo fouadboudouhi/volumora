@@ -193,7 +193,8 @@ export const getAiKey = () => localStorage.getItem(LS.aiKey) || '';
 export const hasAiKey = () => !!getAiKey();
 export const saveAiKey = (key) => localStorage.setItem(LS.aiKey, key);
 export const clearAiKey = () => localStorage.removeItem(LS.aiKey);
-// The chat stays on this device too, the latest messages only.
+// Only the latest messages are kept. The chat goes into the account's copy on the server (sync.js), never into a
+// backup file.
 const MAX_CHAT = 60;
 // Only what the chat itself writes is read back: a message is a role and a text, a source a web address. A stored
 // chat can also come from the account (a restore), so anything of another shape is dropped rather than drawn.
