@@ -343,9 +343,11 @@ export async function importBackup(backup) {
 export async function mergeBackup(theirs, keep = {}) {
   const keys = [LS.plans, LS.history, LS.body, LS.settings, LS.exercisePrefs, LS.customExercises];
   const before = keys.map((key) => localStorage.getItem(key));
+  // Ids are compared the way the validation writes them: a record here whose id it would rewrite is the same record
+  // as its rewritten copy over there. Nothing the other side holds twice is taken twice.
   const missingIn = (mine, others) => {
-    const ids = new Set(mine.map((item) => item.id));
-    return others.filter((item) => !ids.has(item.id));
+    const ids = new Set(mine.map((item) => asId(item.id)));
+    return others.filter((item) => !ids.has(item.id) && ids.add(item.id));
   };
   const newest = (field) => (a, b) => new Date(b[field]) - new Date(a[field]);
   const sessions = missingIn(getHistory(), theirs.history);

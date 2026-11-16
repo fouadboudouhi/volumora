@@ -2628,7 +2628,12 @@ test('a merge keeps what both sides have: workouts, body entries and own exercis
   const { mergeBackup } = await import('../src/backup.js');
   try {
     await app.setUp();
-    st.saveHistory([workoutOn('both', '2026-11-02', 'vom Gerät'), workoutOn('mine', '2026-11-01')]);
+    // 'alt 1' is an id from before ids were checked: a restore writes it differently, and so does the server's copy.
+    st.saveHistory([
+      workoutOn('both', '2026-11-02', 'vom Gerät'),
+      workoutOn('mine', '2026-11-01'),
+      workoutOn('alt 1', '2026-10-30'),
+    ]);
     st.saveBody([{ id: 'both', date: '2026-11-02T07:00:00.000Z', day: '2026-11-02', weight: 80 }]);
     st.saveCustomExercises([{ id: 'c-mine', name: 'Meine', category: 'other', equipment: 'other' }]);
     st.saveSettings({ ...st.getSettings(), weeklyGoal: 4 });
@@ -2638,6 +2643,7 @@ test('a merge keeps what both sides have: workouts, body entries and own exercis
       history: [
         workoutOn('theirs', '2026-11-03', 'Tag theirs', '110'),
         workoutOn('both', '2026-11-02', 'vom Server'),
+        workoutOn('alt 1', '2026-10-30'),
       ],
       body: [
         { id: 'theirs', date: '2026-11-05T07:00:00.000Z', weight: 79 },
@@ -2656,8 +2662,9 @@ test('a merge keeps what both sides have: workouts, body entries and own exercis
         ['theirs', 'Tag theirs'],
         ['both', 'vom Gerät'],
         ['mine', 'Tag mine'],
+        ['alt 1', 'Tag alt 1'],
       ],
-      'newest first, and the device keeps its own copy of a workout both have'
+      'newest first, the device keeps its own copy of a workout both have, and none is doubled'
     );
     assert.equal(
       history[0].entries[0].sets[0].pr,

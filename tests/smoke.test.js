@@ -2722,6 +2722,25 @@ test('a second device gets new workouts by itself, and signing in again after a 
     assert.equal(weighed.entry.hasPhoto, true);
     assert.match(weighed.photo, /^data:image\/png;base64,/);
 
+    // Both train before they hear of each other. "Save now" on the phone meets the tablet's newer state: it is
+    // merged, and nobody is asked which of the two to lose.
+    await train(tablet, 'Vom Tablet', '2026-11-05');
+    await tablet.evaluate(async () => (await import('/src/sync.js')).uploadNow());
+    await train(page, 'Drittes vom Handy', '2026-11-06');
+    await page.evaluate(async () => (await import('/src/render.js')).navigate('backup'));
+    await page.click('#syncNow');
+    await page.waitForFunction(() => /Gesichert/.test(document.querySelector('.toast')?.textContent || ''));
+    assert.deepEqual(await workouts(page), [
+      'Drittes vom Handy',
+      'Vom Tablet',
+      'Zweites vom Handy',
+      'Erstes vom Handy',
+    ]);
+    assert.match(await server.stored('anna'), /Drittes vom Handy/);
+    assert.match(await server.stored('anna'), /Vom Tablet/);
+    assert.equal(await page.locator('#syncKeep').count(), 0);
+    assert.equal(await page.locator('.sync-on .ai-error').count(), 0);
+
     // The server forgets every sign-in. The tablet is used on, and the app notices when it tries to save.
     await server.db.setPassword('anna', 'neues-passwort-1');
     await train(tablet, 'Ohne Anmeldung', '2026-11-08');
@@ -2744,9 +2763,15 @@ test('a second device gets new workouts by itself, and signing in again after a 
     // Signing in again asks nothing and replaces nothing: the workout made meanwhile stays and reaches the account.
     await tablet.waitForSelector('.sync-form', { state: 'detached' });
     assert.equal(await tablet.locator('#signInAgain').count(), 0);
-    assert.deepEqual(await workouts(tablet), ['Ohne Anmeldung', 'Zweites vom Handy', 'Erstes vom Handy']);
+    assert.deepEqual(await workouts(tablet), [
+      'Ohne Anmeldung',
+      'Drittes vom Handy',
+      'Vom Tablet',
+      'Zweites vom Handy',
+      'Erstes vom Handy',
+    ]);
     assert.match(await server.stored('anna'), /Ohne Anmeldung/);
-    assert.match(await server.stored('anna'), /Zweites vom Handy/);
+    assert.match(await server.stored('anna'), /Drittes vom Handy/);
   } finally {
     await tablet?.context().close();
     await server.stop();
