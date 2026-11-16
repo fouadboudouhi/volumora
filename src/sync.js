@@ -459,15 +459,19 @@ async function rejoin(config) {
   // other, and nothing is lost in the meantime.
   saveConfig({ ...syncConfig(), ...config, version, hash, marks, at, problem: '', latest: '' });
   localStorage.removeItem(LEFT);
-  await inTurn(() => exchange(syncConfig(), { look: true })).catch((err) =>
-    update({ problem: err.code || 'server', latest: err.latest || '' })
-  );
-  return 'merged';
+  try {
+    await inTurn(() => exchange(syncConfig(), { look: true }));
+    return 'merged';
+  } catch (err) {
+    update({ problem: err.code || 'server', latest: err.latest || '' });
+    return 'waiting';
+  }
 }
 // Signs this device in to an account: afterwards the device and the account hold the same data, and the data here
 // is this account's. Data of another account is never uploaded: `replace` says the person agreed to have it removed
 // from this device first, and without that the sign-in stops. Data nobody is noted for needs the person's word too,
-// `replace` or `adopt` (it is theirs and joins the account). Returns 'restored', 'uploaded' or 'merged'.
+// `replace` or `adopt` (it is theirs and joins the account). Returns 'restored', 'uploaded', 'merged', or 'waiting'
+// when the account is back on its own data but the exchange with the server still has to succeed.
 export async function joinAccount(config, { replace = false, adopt = false } = {}) {
   const { whose } = await deviceData(config);
   const foreign = whose === 'other' || whose === 'unknown';

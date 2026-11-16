@@ -516,6 +516,7 @@ const ui = {
   'sync.restored': 'Data loaded from the server',
   'sync.connected': 'Signed in, the app saves by itself from now on',
   'sync.merged': 'Signed in. The data on this device and in the account has been merged.',
+  'sync.waiting': 'Signed in. The exchange with the server is still to come; the app will try again.',
   'sync.news': 'New data from another device has been added',
   'sync.otherTitle': 'Data of “{user}” is on this device',
   'sync.otherText':

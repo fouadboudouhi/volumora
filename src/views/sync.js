@@ -71,9 +71,8 @@ async function connect(config, decision, done) {
   // Another account's data was just removed: the app starts over, so nothing of it lingers on screen or in memory.
   if (decision.replace) return location.reload();
   done();
-  toast(
-    t(outcome === 'uploaded' ? 'sync.connected' : outcome === 'merged' ? 'sync.merged' : 'sync.restored')
-  );
+  const said = { uploaded: 'sync.connected', merged: 'sync.merged', waiting: 'sync.waiting' };
+  toast(t(said[outcome] || 'sync.restored'));
 }
 
 // The form itself, for the sheet on the backup screen and for the gate at the start. The server is set; only

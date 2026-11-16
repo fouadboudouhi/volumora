@@ -2521,6 +2521,22 @@ test('signing in again after the sign-in was lost keeps the workouts made meanwh
     );
     assert.equal(sync.syncConfig().token, again.token);
     assert.equal(sync.syncConfig().problem || '', '');
+
+    // The same once more, but the connection drops right after the sign-in: the account is back on its data all
+    // the same, and the exchange is made up for later.
+    await s.db.setPassword('anna', 'new-password-2');
+    st.saveHistory([workoutOn('a4', '2026-11-12'), ...st.getHistory()]);
+    await assert.rejects(sync.syncNow(), { code: 'session' });
+    const third = await sync.signIn(url, 'anna', 'new-password-2');
+    const online = globalThis.fetch;
+    globalThis.fetch = () => Promise.reject(new TypeError('offline'));
+    assert.equal(await sync.joinAccount(third), 'waiting');
+    globalThis.fetch = online;
+    assert.equal(sync.syncConfig().token, third.token);
+    assert.equal(sync.syncConfig().problem, 'network');
+    assert.deepEqual(ids(), ['a4', 'a3', 'a2', 'a1']);
+    await sync.syncNow();
+    assert.equal((await storedFor(s, 'anna')).data.backup.history[0].id, 'a4');
     await sync.signOut();
   } finally {
     app.done();

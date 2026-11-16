@@ -503,6 +503,7 @@ const ui = {
   'sync.restored': 'Daten vom Server geladen',
   'sync.connected': 'Angemeldet, die App sichert ab jetzt von selbst',
   'sync.merged': 'Angemeldet. Die Daten auf diesem Gerät und im Konto sind zusammengeführt.',
+  'sync.waiting': 'Angemeldet. Der Abgleich mit dem Server steht noch aus, die App versucht es wieder.',
   'sync.news': 'Neue Daten von einem anderen Gerät übernommen',
   'sync.otherTitle': 'Hier liegen Daten von „{user}“',
   'sync.otherText':
