@@ -654,8 +654,9 @@ test('the browser back button closes overlays first and then steps back through 
   await page.keyboard.press('Escape');
   await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
   await page.waitForTimeout(50);
+  // The plans tab replaced the "Mehr" entry, so the step back lands on Heute.
   await page.goBack();
-  await page.waitForSelector('#installRow');
+  await page.waitForSelector('.next-card');
   // The exercise library behaves the same way.
   await page.click('[data-nav="plans"]');
   await page.click('[data-edit-plan]');
@@ -664,6 +665,24 @@ test('the browser back button closes overlays first and then steps back through 
   await page.goBack();
   await page.waitForSelector('.exercise-library', { state: 'detached' });
   assert.equal(await page.locator('#savePlan').count(), 1, 'still in the editor');
+});
+
+test('the back arrow steps back through the history and tabs do not pile up entries', async () => {
+  const length = () => page.evaluate(() => history.length);
+  const start = await length();
+  await page.click('[data-nav="more"]');
+  await page.click('[data-nav="analytics"]');
+  await page.click('[data-nav="plans"]');
+  await page.click('[data-nav="more"]');
+  assert.equal(await length(), start + 1, 'leaving Heute adds one entry, switching tabs replaces it');
+  await page.click('[data-nav="settings"]');
+  await page.waitForSelector('#settingsForm');
+  await page.click('.backrow .back');
+  await page.waitForSelector('#installRow');
+  assert.equal(await length(), start + 2, 'the arrow went back instead of adding an entry');
+  await page.goBack();
+  await page.waitForSelector('.next-card');
+  assert.equal(await page.locator('#settingsForm').count(), 0, 'system back does not return to the settings');
 });
 
 test('charts follow the viewport width', async () => {
@@ -1246,6 +1265,34 @@ test('a running workout survives a deleted day, a stale history entry and starts
   await page.goBack();
   await page.waitForSelector('.workout-exercise');
   assert.equal(await first.locator('input[data-set-field="weight"][data-index="0"]').inputValue(), '60');
+});
+
+test('system back after finishing does not reopen the workout', async () => {
+  // Leave the workout with its arrow and come back to it, the way that left an entry for it behind.
+  await page.click('.next-card [data-start]');
+  const first = page.locator('.workout-exercise').first();
+  await first.locator('input[data-set-field="weight"][data-index="0"]').fill('60');
+  await first.locator('input[data-set-field="reps"][data-index="0"]').fill('8');
+  await first.locator('[data-set-done="0"]').click();
+  await page.click('#exitWorkout');
+  await page.waitForSelector('.resume-card');
+  await page.click('.resume-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await page.click('#finishWorkout');
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('.summary');
+  await page.click('#summaryDone');
+  await page.waitForSelector('.next-card');
+  await page.goBack();
+  await page.waitForFunction(() => history.state?.volumora?.view === 'home');
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator('.workout-exercise').count(), 0, 'no workout on screen');
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('volumora-active-v2')),
+    null,
+    'no empty copy of the workout was started'
+  );
+  assert.equal(await page.locator('.resume-card').count(), 0);
 });
 
 test('an action that navigates from a sheet leaves the history in order', async () => {

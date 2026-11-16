@@ -1,7 +1,7 @@
 // Top bar, bottom navigation and shared snippets.
 import { t } from '../i18n.js';
 import { icon } from '../icons.js';
-import { navigate, render } from '../render.js';
+import { goBack, navigate, render, switchTab } from '../render.js';
 import { state } from '../state.js';
 import { aiAvailable } from '../aiAccess.js';
 
@@ -51,7 +51,9 @@ export function bindShell() {
     b.onclick = () => {
       if (b.dataset.nav === 'calendar' && state.view !== 'calendar') state.calendarOffset = 0;
       if (b.dataset.nav === 'ai') state.aiReturn = state.view;
-      navigate(b.dataset.nav);
+      if (b.classList.contains('back')) goBack(b.dataset.nav);
+      else if (b.classList.contains('nav-btn')) switchTab(b.dataset.nav);
+      else navigate(b.dataset.nav);
     };
   });
 }

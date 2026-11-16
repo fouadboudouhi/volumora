@@ -13,7 +13,7 @@ import {
   supersetLetters,
   unlinkSuperset,
 } from '../plans.js';
-import { navigate, render } from '../render.js';
+import { goBack, navigate, render } from '../render.js';
 import { TRACK_TYPES, trackTypeLabel } from '../sets.js';
 import { state } from '../state.js';
 import { allPlans, persistPlan, savePlans } from '../storage.js';
@@ -366,7 +366,7 @@ export function bind() {
   });
   const leave = () => {
     collectPlan();
-    navigate(state.editorReturn || 'plans');
+    goBack(state.editorReturn || 'plans');
   };
   document.querySelector('#savePlan').onclick = leave;
   document.querySelector('#editorBack').onclick = leave;
