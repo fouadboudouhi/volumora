@@ -16,6 +16,12 @@ if (realIdb)
     configurable: true,
   });
 
+// The offline copies on this address belong to the real app: the demo sees none and can clear none.
+if ('caches' in window)
+  Object.defineProperty(window, 'caches', {
+    value: { keys: async () => [], delete: async () => false },
+    configurable: true,
+  });
 const SEEDED = 'volumora-demo-seeded';
 if (!localStorage.getItem('volumora-sync')) {
   localStorage.setItem(

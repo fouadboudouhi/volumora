@@ -6,7 +6,16 @@ import { importParsed, parseImport } from '../importers.js';
 import { icon } from '../icons.js';
 import { navigate, render } from '../render.js';
 import { state } from '../state.js';
-import { activePlan, getLastBackup, getSettings, markBackup, photos, saveSettings } from '../storage.js';
+import {
+  OWN,
+  activePlan,
+  clearOwnStorage,
+  getLastBackup,
+  getSettings,
+  markBackup,
+  photos,
+  saveSettings,
+} from '../storage.js';
 import { applyTheme } from '../theme.js';
 import { confirmDialog, infoDialog, toast, undoToast } from '../ui.js';
 import { fieldValue, fromDisplay, inUnit, unit } from '../units.js';
@@ -15,7 +24,7 @@ import { emptySessionCount, removeEmptySessions, restoreHistory } from '../worko
 import { openAi } from './ai.js';
 import { mediaCredit, parentRow } from './shell.js';
 import { disablePush, enablePush, pushOn } from '../push.js';
-import { isAdmin, syncConfig } from '../sync.js';
+import { isAdmin, signOut, syncConfig } from '../sync.js';
 import { bindSync, syncSection } from './sync.js';
 
 const menuRow = (attrs, ic, title, text, chevron = true) =>
@@ -241,10 +250,16 @@ export function bind() {
       danger: true,
     });
     if (!ok) return;
-    localStorage.clear();
+    // Signed out first, and for good: an upload still on its way must not bring the sign-in back, or the emptied
+    // app would be saved over the backup in the account.
+    disablePush();
+    await signOut();
+    clearOwnStorage();
     await photos.clear().catch(() => {});
     if ('caches' in window)
-      await caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
+      await caches
+        .keys()
+        .then((keys) => Promise.all(keys.filter((k) => OWN.test(k)).map((k) => caches.delete(k))));
     location.reload();
   });
   document.querySelector('#installRow')?.addEventListener('click', async () => {

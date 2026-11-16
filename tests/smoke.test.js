@@ -1111,6 +1111,13 @@ test('legal page in both languages, then deleting all data returns to the first-
   await page.click('#onboardingSkip');
   await page.waitForSelector('.next-card');
   await seedHistory();
+  // Prepora lives on the same address and shares storage and caches with Volumora.
+  await page.evaluate(async () => {
+    localStorage.setItem('prepora-session', '{"token":"x"}');
+    localStorage.setItem('prepora-sync', '{"dirty":true}');
+    await (await caches.open('prepora-v33')).put('/prepora/x', new Response('p'));
+    await (await caches.open('volumora-v1')).put('/volumora/x', new Response('v'));
+  });
   await page.click('[data-nav="more"]');
   await page.click('[data-nav="settings"]');
   await page.click('#deleteAll');
@@ -1122,6 +1129,19 @@ test('legal page in both languages, then deleting all data returns to the first-
     [],
     'only the fresh defaults remain'
   );
+  const others = await page.evaluate(async () => ({
+    keys: Object.keys(localStorage)
+      .filter((k) => k.startsWith('prepora'))
+      .sort(),
+    caches: await caches.keys(),
+  }));
+  assert.deepEqual(
+    others.keys,
+    ['prepora-session', 'prepora-sync'],
+    'what belongs to Prepora is still there'
+  );
+  assert.ok(others.caches.includes('prepora-v33'), 'and so is its offline copy');
+  assert.ok(!others.caches.includes('volumora-v1'), "Volumora's own old cache is gone");
 });
 
 test('a Hevy export merges into the history and unknown exercises become custom ones', async () => {
@@ -2708,7 +2728,7 @@ test('the admin stores the Claude key, sets budgets and invites; everyone else j
     await page.fill('#aiInput', 'Und noch mal');
     await page.click('#aiSend');
     await page.waitForSelector('.ai-error');
-    assert.match(await page.textContent('.ai-error'), /Budget.*aufgebraucht/);
+    assert.match(await page.textContent('.ai-error'), /Budget.*reicht dafür nicht mehr/);
     assert.equal(claudeCalls.length, calls);
     assert.equal(await page.inputValue('#aiInput'), 'Und noch mal', 'the question goes back into the field');
     // The friend registers with the invitation and chats with the default budget; the admin screen stays closed.

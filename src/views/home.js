@@ -70,7 +70,7 @@ function weekDots(weekSessions, today) {
 }
 
 const dayRow = (plan, d) =>
-  `<button type="button" class="row" data-start="${d.id}" data-plan="${plan.id}"><span class="row-main"><b>${esc(d.name)}</b><small>${plural(d.exercises.length, 'exercises')}</small></span>${icon('chevron-right')}</button>`;
+  `<button type="button" class="row" data-start="${esc(d.id)}" data-plan="${esc(plan.id)}"><span class="row-main"><b>${esc(d.name)}</b><small>${plural(d.exercises.length, 'exercises')}</small></span>${icon('chevron-right')}</button>`;
 
 // A suggestion, not a task: it can be waved away and then stays quiet for weeks.
 function deloadCard(history, today) {
@@ -107,7 +107,7 @@ export function view() {
   const startAttr = freeActive
     ? 'id="startFree"'
     : next?.exercises.length
-      ? `data-start="${next.id}" data-plan="${resume ? active.planId : plan.id}"`
+      ? `data-start="${esc(next.id)}" data-plan="${esc(resume ? active.planId : plan.id)}"`
       : 'id="editActivePlan"';
   const minutes = next && !resume ? usualMinutes(history, plan?.id, next.id) : 0;
   const nextCard = next

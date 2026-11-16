@@ -35,7 +35,7 @@ export function view() {
   state.templatePreview = null;
   const rows = TEMPLATES.map(
     (x) =>
-      `<button type="button" class="row" data-template="${x.id}"><span class="row-main"><b>${esc(templateName(x))}</b><small>${esc(templateDescription(x))} · ${plural(x.days, 'trainingDays')} · ${esc(equipmentLabel(x.equipment))}</small></span>${icon('chevron-right')}</button>`
+      `<button type="button" class="row" data-template="${esc(x.id)}"><span class="row-main"><b>${esc(templateName(x))}</b><small>${esc(templateDescription(x))} · ${plural(x.days, 'trainingDays')} · ${esc(equipmentLabel(x.equipment))}</small></span>${icon('chevron-right')}</button>`
   ).join('');
   return `<main class="shell">${parentRow('plans')}<section class="page-head compact"><h1>${t('templates.title')}</h1></section><p class="muted templates-intro">${t('templates.intro')}</p><div class="list">${rows}</div></main>`;
 }

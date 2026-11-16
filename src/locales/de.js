@@ -436,7 +436,7 @@ const ui = {
     'Entfernt Pläne, Trainings, Körperdaten, Fotos und Einstellungen von diesem Gerät. Ein Backup vorher lohnt sich.',
   'settings.deleteAllTitle': 'Wirklich alles löschen?',
   'settings.deleteAllText':
-    'Alle Pläne, Trainings, Messungen, Fotos und Einstellungen auf diesem Gerät werden unwiderruflich gelöscht.',
+    'Alle Pläne, Trainings, Messungen, Fotos und Einstellungen werden von diesem Gerät gelöscht. Die Sicherung in deinem Konto bleibt bestehen.',
   'settings.deleteAllConfirm': 'Alles löschen',
   'legal.title': 'Datenschutz & Lizenzen',
   'legal.privacy': 'Datenschutz',
@@ -565,7 +565,7 @@ const ui = {
     'Dein Server stellt noch keinen Assistenten bereit. Mit einem eigenen Schlüssel geht es trotzdem.',
   'ai.budgetUsed': 'Diesen Monat {used} von {budget} $',
   'ai.budgetHint': 'Dein Budget auf dem Server, geschätzt aus den Token-Zahlen. Am 1. beginnt es von vorn.',
-  'ai.error.budget': 'Dein KI-Budget für diesen Monat ist aufgebraucht. Am 1. geht es weiter.',
+  'ai.error.budget': 'Dein KI-Budget für diesen Monat reicht dafür nicht mehr. Am 1. geht es weiter.',
   'ai.error.session': 'Du bist abgemeldet. Melde dich unter Mehr → Backup neu an.',
   'ai.error.noai': 'Der Assistent ist auf diesem Server nicht eingerichtet.',
   'home.last': 'Zuletzt',
