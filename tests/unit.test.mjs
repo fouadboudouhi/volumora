@@ -1126,6 +1126,30 @@ test('replacing an exercise keeps the sets already ticked and puts the new one a
     session.exercises.map((x) => x.id),
     ['a', 'c', 'd']
   );
+
+  // Only a warm-up ticked: that is no trained exercise, so it replaces in place. A warm-up next to a ticked
+  // working set stays, but the target counts the working sets only.
+  const warm = (sets) => ({
+    detached: true,
+    exercises: [{ id: 'w', libraryId: '0025', sets: 3, range: '8–12', rest: 90 }],
+    entries: [{ exerciseId: 'w', libraryId: '0025', trackType: 'weight_reps', sets }],
+  });
+  const warmupOnly = warm([{ ...set('20', true), type: 'warmup' }, set('', false), set('', false)]);
+  replaceSessionExercise(warmupOnly, 0, { id: 'e', libraryId: '0003' });
+  assert.deepEqual(
+    warmupOnly.entries.map((e) => e.exerciseId),
+    ['e']
+  );
+  const warmupAndOne = warm([{ ...set('20', true), type: 'warmup' }, set('60', true), set('', false)]);
+  replaceSessionExercise(warmupAndOne, 0, { id: 'e', libraryId: '0003' });
+  assert.deepEqual(
+    warmupAndOne.exercises.map((x) => [x.id, x.sets]),
+    [
+      ['w', 1],
+      ['e', 3],
+    ]
+  );
+  assert.equal(warmupAndOne.entries[0].sets.length, 2, 'the ticked warm-up stays with the ticked set');
 });
 
 test('finishing: open sets drop out, duration ends with the last set and has a cap', async () => {

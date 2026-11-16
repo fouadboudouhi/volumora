@@ -318,7 +318,8 @@ export function moveSessionExercise(session, from, to) {
   for (const list of [session.exercises, session.entries]) [list[from], list[to]] = [list[to], list[from]];
 }
 // The replacement keeps the slot's targets (sets, range, rest, superset) and starts with fresh sets. Sets already
-// ticked were trained, so the old exercise stays with just those and the replacement follows right after it.
+// ticked were trained, so the old exercise stays with just those and the replacement follows right after it. Only
+// ticked working sets count for that: a warm-up alone is no trained exercise.
 export function replaceSessionExercise(session, index, ex) {
   detachSession(session);
   touchSession(session);
@@ -326,14 +327,14 @@ export function replaceSessionExercise(session, index, ex) {
   const next = { ...ex, sets: old.sets, range: old.range, rest: old.rest };
   if (old.supersetId) next.supersetId = old.supersetId;
   const entry = session.entries[index];
-  const ticked = entry.sets.filter((s) => s.done);
-  if (!ticked.length) {
+  const worked = entry.sets.filter((s) => s.done && isWorkSet(s)).length;
+  if (!worked) {
     session.exercises[index] = next;
     session.entries[index] = entryFor(next);
     return;
   }
-  session.exercises[index] = { ...old, sets: ticked.length };
-  entry.sets = ticked;
+  session.exercises[index] = { ...old, sets: worked };
+  entry.sets = entry.sets.filter((s) => s.done);
   session.exercises.splice(index + 1, 0, next);
   session.entries.splice(index + 1, 0, entryFor(next));
 }
