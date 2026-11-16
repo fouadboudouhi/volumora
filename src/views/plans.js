@@ -10,7 +10,7 @@ import { openAi } from './ai.js';
 
 const planRow = (p, activeId) => {
   const count = p.days.reduce((n, d) => n + d.exercises.length, 0);
-  return `<div class="row-wrap"><button type="button" class="row" data-edit-plan="${p.id}"><span class="row-main"><b>${esc(p.name)}${p.id === activeId ? `<span class="chip chip-green">${t('plans.active')}</span>` : ''}</b><small>${plural(p.days.length, 'days')} · ${plural(count, 'exercises')}</small></span>${icon('chevron-right')}</button>${p.id === activeId ? '' : `<button type="button" class="compact-btn secondary" data-activate-plan="${p.id}">${t('plans.activate')}</button>`}</div>`;
+  return `<div class="row-wrap"><button type="button" class="row" data-edit-plan="${esc(p.id)}"><span class="row-main"><b>${esc(p.name)}${p.id === activeId ? `<span class="chip chip-green">${t('plans.active')}</span>` : ''}</b><small>${plural(p.days.length, 'days')} · ${plural(count, 'exercises')}</small></span>${icon('chevron-right')}</button>${p.id === activeId ? '' : `<button type="button" class="compact-btn secondary" data-activate-plan="${esc(p.id)}">${t('plans.activate')}</button>`}</div>`;
 };
 
 export function view() {

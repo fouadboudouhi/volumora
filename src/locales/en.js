@@ -433,7 +433,7 @@ const ui = {
     'Removes plans, workouts, body data, photos and settings from this device. A backup first is a good idea.',
   'settings.deleteAllTitle': 'Really delete everything?',
   'settings.deleteAllText':
-    'All plans, workouts, measurements, photos and settings on this device will be deleted for good.',
+    'All plans, workouts, measurements, photos and settings are deleted from this device. The backup in your account stays.',
   'settings.deleteAllConfirm': 'Delete everything',
   'legal.title': 'Privacy & licences',
   'legal.privacy': 'Privacy',
@@ -571,7 +571,7 @@ const ui = {
   'ai.setupNoServerAi': 'Your server does not offer an assistant yet. It still works with a key of your own.',
   'ai.budgetUsed': 'This month {used} of {budget} $',
   'ai.budgetHint': 'Your budget on the server, estimated from token counts. It starts over on the 1st.',
-  'ai.error.budget': 'Your AI budget for this month is used up. It continues on the 1st.',
+  'ai.error.budget': 'Your AI budget for this month no longer covers this. It continues on the 1st.',
   'ai.error.session': 'You are signed out. Sign in again under More → Backup.',
   'ai.error.noai': 'The assistant is not set up on this server.',
   'home.last': 'Last',

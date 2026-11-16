@@ -1,4 +1,4 @@
-const VERSION = 'v77';
+const VERSION = 'v78';
 const CACHE = `volumora-${VERSION}`;
 // Cross-origin exercise GIFs get their own bounded cache so the app shell cache stays small and predictable.
 // Its name stays the same across versions: an update must not throw the downloaded animations away.
@@ -103,7 +103,12 @@ self.addEventListener('activate', (e) =>
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((k) => k !== CACHE && k !== MEDIA_CACHE).map((k) => caches.delete(k)))
+        // Other apps on this address keep their caches: only Volumora's own old ones go.
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith('volumora-') && k !== CACHE && k !== MEDIA_CACHE)
+            .map((k) => caches.delete(k))
+        )
       )
       .then(() => self.clients.claim())
   )

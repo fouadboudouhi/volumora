@@ -26,6 +26,14 @@ export const LS = {
   aiMemory: 'volumora-ai-memory',
   aiUsage: 'volumora-ai-usage',
 };
+// Prepora and the website live on the same address and share this storage and the caches with Volumora. Whatever
+// Volumora clears is only what carries its own name.
+export const OWN = /^volumora(-|$)/;
+export function clearOwnStorage(storage = localStorage) {
+  Array.from({ length: storage.length }, (_, i) => storage.key(i))
+    .filter((key) => OWN.test(key))
+    .forEach((key) => storage.removeItem(key));
+}
 export const DEFAULT_SETTINGS = {
   language: 'auto',
   theme: 'auto',
@@ -187,10 +195,22 @@ export const saveAiKey = (key) => localStorage.setItem(LS.aiKey, key);
 export const clearAiKey = () => localStorage.removeItem(LS.aiKey);
 // The chat stays on this device too, the latest messages only.
 const MAX_CHAT = 60;
-export const getAiChat = () => {
-  const chat = read(LS.aiChat, []);
-  return Array.isArray(chat) ? chat : [];
-};
+// Only what the chat itself writes is read back: a message is a role and a text, a source a web address. A stored
+// chat can also come from the account (a restore), so anything of another shape is dropped rather than drawn.
+export const cleanChat = (chat) =>
+  (Array.isArray(chat) ? chat : [])
+    .filter(
+      (m) =>
+        m && typeof m === 'object' && typeof m.text === 'string' && ['user', 'assistant'].includes(m.role)
+    )
+    .map(({ sources, actions, ...message }) => ({
+      ...message,
+      ...(Array.isArray(sources)
+        ? { sources: sources.filter((s) => s && typeof s === 'object' && /^https:\/\//.test(s.url)) }
+        : {}),
+      ...(Array.isArray(actions) ? { actions: actions.filter((a) => a && typeof a === 'object') } : {}),
+    }));
+export const getAiChat = () => cleanChat(read(LS.aiChat, []));
 export const saveAiChat = (messages) => write(LS.aiChat, messages.slice(-MAX_CHAT));
 // What the assistant keeps across chats. Like the chat, it stays on this device and out of backups.
 export const getAiMemory = () => {

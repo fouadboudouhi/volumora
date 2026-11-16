@@ -112,6 +112,17 @@ export function exportCsv() {
 // cannot break rendering or smuggle markup into the page.
 const asStr = (v, max = 300) =>
   typeof v === 'string' ? v.slice(0, max) : typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
+// Ids are written into attributes and used to find things again. One of any other shape than the app's own is
+// swapped for a harmless one made from it. The same id always becomes the same new one, so plans and history that
+// point at each other still do.
+const SAFE_ID = /^[\w.:-]{1,80}$/;
+const asId = (v) => {
+  const id = asStr(v);
+  if (!id || SAFE_ID.test(id)) return id;
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
+  return `id-${(hash >>> 0).toString(36)}`;
+};
 const asNum = (v, fallback = 0, min = -Infinity, max = Infinity) => {
   const n = Number(String(v ?? '').replace(',', '.'));
   return v !== '' && v != null && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
@@ -145,8 +156,8 @@ const asSet = (s) => {
 };
 const asExercise = (ex) =>
   normalizeLegacyExercise({
-    id: asStr(ex?.id) || uid(),
-    libraryId: asStr(ex?.libraryId) || undefined,
+    id: asId(ex?.id) || uid(),
+    libraryId: asId(ex?.libraryId) || undefined,
     name: asStr(ex?.name, 80) || t('exercise.fallback'),
     sourceName: asStr(ex?.sourceName, 80) || undefined,
     category: asStr(ex?.category, 40) || undefined,
@@ -159,7 +170,7 @@ const asExercise = (ex) =>
     gif: asUrl(ex?.gif),
     note: asStr(ex?.note, 300),
     ...(TRACK_TYPES.includes(ex?.trackType) ? { trackType: ex.trackType } : {}),
-    ...(asStr(ex?.supersetId, 40) ? { supersetId: asStr(ex.supersetId, 40) } : {}),
+    ...(asId(ex?.supersetId) ? { supersetId: asId(ex.supersetId) } : {}),
     custom: ex?.custom ? true : undefined,
   });
 
@@ -169,21 +180,20 @@ export function validateBackup(data) {
   const plans = data.plans.items
     .filter((p) => p && typeof p === 'object' && Array.isArray(p.days))
     .map((p) => {
-      const days = p.days
-        .filter((d) => d && typeof d === 'object')
-        .map((d) => ({
-          id: asStr(d.id) || uid(),
-          name: asStr(d.name, 60) || t('day.fallback'),
-          subtitle: asStr(d.subtitle, 80),
-          exercises: (Array.isArray(d.exercises) ? d.exercises : []).map(asExercise),
-        }));
+      const given = p.days.filter((d) => d && typeof d === 'object');
+      const days = given.map((d) => ({
+        id: asId(d.id) || uid(),
+        name: asStr(d.name, 60) || t('day.fallback'),
+        subtitle: asStr(d.subtitle, 80),
+        exercises: (Array.isArray(d.exercises) ? d.exercises : []).map(asExercise),
+      }));
       const assignments = {};
-      days.forEach((d) => {
-        const w = p.schedule?.assignments?.[d.id];
+      days.forEach((d, i) => {
+        const w = p.schedule?.assignments?.[given[i].id];
         if (Number.isInteger(w) && w >= 0 && w <= 6) assignments[d.id] = w;
       });
       return {
-        id: asStr(p.id) || uid(),
+        id: asId(p.id) || uid(),
         name: asStr(p.name, 60) || t('plan.fallback'),
         description: asStr(p.description, 200),
         createdAt: asDate(p.createdAt) || new Date().toISOString(),
@@ -197,10 +207,10 @@ export function validateBackup(data) {
     .map((h) => {
       const finishedAt = asDate(h.finishedAt);
       const session = {
-        id: asStr(h.id) || uid(),
-        planId: asStr(h.planId),
+        id: asId(h.id) || uid(),
+        planId: asId(h.planId),
         planName: asStr(h.planName, 60),
-        dayId: asStr(h.dayId),
+        dayId: asId(h.dayId),
         dayName: asStr(h.dayName, 60) || asStr(h.day, 60),
         startedAt: asDate(h.startedAt) || finishedAt,
         finishedAt,
@@ -216,12 +226,12 @@ export function validateBackup(data) {
           ? { detached: true, exercises: (Array.isArray(h.exercises) ? h.exercises : []).map(asExercise) }
           : {}),
         entries: (Array.isArray(h.entries) ? h.entries : []).map((e) => ({
-          exerciseId: asStr(e?.exerciseId),
-          libraryId: asStr(e?.libraryId) || undefined,
+          exerciseId: asId(e?.exerciseId),
+          libraryId: asId(e?.libraryId) || undefined,
           name: asStr(e?.name, 80) || t('exercise.fallback'),
           note: asStr(e?.note, 500),
           ...(TRACK_TYPES.includes(e?.trackType) ? { trackType: e.trackType } : {}),
-          ...(asStr(e?.supersetId, 40) ? { supersetId: asStr(e.supersetId, 40) } : {}),
+          ...(asId(e?.supersetId) ? { supersetId: asId(e.supersetId) } : {}),
           sets: (Array.isArray(e?.sets) ? e.sets : []).map(asSet),
         })),
       };
@@ -231,7 +241,7 @@ export function validateBackup(data) {
   const body = (Array.isArray(data.body) ? data.body : [])
     .filter((e) => e && typeof e === 'object' && asDate(e.date))
     .map((e) => ({
-      id: asStr(e.id) || uid(),
+      id: asId(e.id) || uid(),
       date: asDate(e.date),
       day: /^\d{4}-\d{2}-\d{2}$/.test(e.day || '') ? e.day : dayKey(e.date),
       weight: asNum(e.weight, 0, 0, 500) || '',
@@ -261,11 +271,11 @@ export function validateBackup(data) {
   const prefs = data.exercisePrefs && typeof data.exercisePrefs === 'object' ? data.exercisePrefs : {};
   const exercisePrefs = {
     favorites: (Array.isArray(prefs.favorites) ? prefs.favorites : [])
-      .map((x) => asStr(x))
+      .map((x) => asId(x))
       .filter(Boolean)
       .slice(0, 200),
     recent: (Array.isArray(prefs.recent) ? prefs.recent : [])
-      .map((x) => asStr(x))
+      .map((x) => asId(x))
       .filter(Boolean)
       .slice(0, 12),
   };
@@ -273,7 +283,7 @@ export function validateBackup(data) {
     .filter((c) => c && typeof c === 'object' && asStr(c.name, 80))
     .slice(0, 500)
     .map((c) => ({
-      id: asStr(c.id) || uid(),
+      id: asId(c.id) || uid(),
       name: asStr(c.name, 80),
       category: GROUPS.includes(c.category) ? c.category : 'other',
       equipment: asStr(c.equipment, 40) || 'other',
@@ -281,9 +291,8 @@ export function validateBackup(data) {
       note: asStr(c.note, 300),
       createdAt: asDate(c.createdAt) || new Date().toISOString(),
     }));
-  const activePlanId = plans.some((p) => p.id === data.plans.activePlanId)
-    ? data.plans.activePlanId
-    : plans[0].id;
+  const wanted = asId(data.plans.activePlanId);
+  const activePlanId = plans.some((p) => p.id === wanted) ? wanted : plans[0].id;
   return { plans: { activePlanId, items: plans }, history, body, settings, exercisePrefs, customExercises };
 }
 

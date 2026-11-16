@@ -48,7 +48,17 @@ export const costOf = (usage = {}) =>
 
 // `auth` is the person's own key, or { url, token } for the server that holds a key for everyone and forwards
 // the request. The server answers with Claude's own errors, plus a few of its own as plain words.
-const SERVER_ERRORS = { budget: 'budget', session: 'session', 'no ai': 'noai', anthropic: 'server' };
+const SERVER_ERRORS = {
+  budget: 'budget',
+  session: 'session',
+  'no ai': 'noai',
+  anthropic: 'server',
+  // Another request of this account is still running: the same as "too many at once", and worth one more try.
+  busy: 'rate',
+  model: 'model',
+  tool: 'request',
+  request: 'request',
+};
 async function post(path, auth, body, signal) {
   const server = typeof auth === 'object' && auth !== null;
   let response;
