@@ -370,9 +370,12 @@ function dictateSet(exerciseIndex) {
         return;
       }
       const set = describeSet(done, trackType);
+      const id = current().entries[exerciseIndex].exerciseId;
       undoToast(done.pr ? t('workout.record', { set }) : t('dictate.logged', { set }), () =>
         mutate((s) => {
-          const sets = s.entries[exerciseIndex].sets;
+          // By the exercise, not its place: a replace or move meanwhile shifts the places.
+          const sets = s.entries.find((e) => e.exerciseId === id)?.sets;
+          if (!sets?.[setIndex]) return;
           if (added) sets.splice(setIndex, 1);
           else sets[setIndex] = previous;
         }, true)
@@ -473,9 +476,10 @@ export function bind() {
         return;
       }
       const removed = sets[setIndex];
+      const id = current().entries[exerciseIndex].exerciseId;
       mutate((s) => s.entries[exerciseIndex].sets.splice(setIndex, 1), true);
       undoToast(t('workout.setDeleted'), () =>
-        mutate((s) => s.entries[exerciseIndex].sets.splice(setIndex, 0, removed), true)
+        mutate((s) => s.entries.find((e) => e.exerciseId === id)?.sets.splice(setIndex, 0, removed), true)
       );
     };
   });

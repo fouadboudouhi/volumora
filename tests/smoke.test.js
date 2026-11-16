@@ -2036,6 +2036,61 @@ test('a said set reads light weights by what is known, waits for both values and
   assert.equal(await page.locator('#dictateInput').count(), 1, 'the sheet stays open');
 });
 
+test('undoing a said set still hits its exercise after an earlier one was replaced', async () => {
+  await page.click('.next-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await page.fill('[data-set-field="weight"][data-exercise="0"][data-index="0"]', '40');
+  await page.fill('[data-set-field="reps"][data-exercise="0"][data-index="0"]', '9');
+  await page.click('[data-set-done="0"][data-exercise="0"]');
+  await page.evaluate(() => {
+    delete window.SpeechRecognition;
+    navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [{ stop() {} }] });
+    window.webkitSpeechRecognition = class {
+      start() {
+        setTimeout(() => {
+          this.onstart?.();
+          this.onresult?.({ results: [Object.assign([{ transcript: '50 Kilo 8 mal' }], { isFinal: true })] });
+        }, 10);
+      }
+      stop() {
+        this.onend?.();
+      }
+    };
+  });
+  const active = () => page.evaluate(() => JSON.parse(localStorage.getItem('volumora-active-v2')));
+  const { entries } = await active();
+  const second = entries[1].exerciseId;
+  await page.click('[data-dictate="1"]');
+  await page.waitForFunction(
+    () => JSON.parse(localStorage.getItem('volumora-active-v2')).entries[1].sets[0].done
+  );
+  await page.waitForSelector('#dictateInput', { state: 'detached' });
+  // While the toast is up, the first exercise (one set ticked) is replaced: it stays and the new one comes after it.
+  await page.click('[data-exercise-menu="0"]');
+  await page.getByRole('button', { name: 'Ersetzen', exact: true }).click();
+  await page.locator('.library-suggested .library-item [data-pick-exercise]').first().click();
+  await page.waitForSelector('.exercise-library', { state: 'detached' });
+  await page.click('.toast-action');
+  await page.waitForFunction(
+    (id) =>
+      !JSON.parse(localStorage.getItem('volumora-active-v2')).entries.find((e) => e.exerciseId === id).sets[0]
+        .done,
+    second
+  );
+  const after = await active();
+  assert.equal(after.entries.length, entries.length + 1);
+  assert.deepEqual(
+    [after.entries[0].sets[0].weight, after.entries[0].sets[0].done],
+    ['40', true],
+    'the ticked set of the first exercise is untouched'
+  );
+  assert.ok(
+    after.entries[1].sets.every((s) => !s.done),
+    'the new exercise got nothing'
+  );
+  assert.equal(after.entries[2].exerciseId, second);
+});
+
 test('the assistant knows the running workout, the summary and what it remembers', async () => {
   await seedHistory();
   await addAiKey();
