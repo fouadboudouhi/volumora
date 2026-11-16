@@ -1018,6 +1018,64 @@ test('logging: a tick adopts the grey values, an empty set is refused, the clock
   assert.deepEqual(finishCounts(session), { done: 1, typed: 1, open: 1 });
 });
 
+test('replacing an exercise keeps the sets already ticked and puts the new one after it', async () => {
+  const { replaceSessionExercise } = await import('../src/workout.js');
+  const set = (weight, done) => ({ weight, reps: '8', rir: '', done, type: 'normal' });
+  const old = { id: 'a', libraryId: '0025', sets: 3, range: '8–12', rest: 90, supersetId: 'g' };
+  const other = { id: 'b', libraryId: '0001', sets: 3, range: '10–15', rest: 60 };
+  const session = {
+    detached: true,
+    exercises: [old, other],
+    entries: [
+      {
+        exerciseId: 'a',
+        libraryId: '0025',
+        trackType: 'weight_reps',
+        sets: [set('60', true), set('60', true), set('', false)],
+      },
+      { exerciseId: 'b', libraryId: '0001', trackType: 'weight_reps', sets: [set('', false)] },
+    ],
+  };
+  replaceSessionExercise(session, 0, { id: 'c', libraryId: '0003', sets: 4, range: '6–8', rest: 120 });
+  assert.deepEqual(
+    session.entries.map((e) => e.exerciseId),
+    ['a', 'c', 'b'],
+    'the old exercise stays, the new one comes right after it'
+  );
+  assert.deepEqual(
+    session.entries[0].sets.map((s) => [s.weight, s.done]),
+    [
+      ['60', true],
+      ['60', true],
+    ],
+    'exactly the ticked sets stay'
+  );
+  assert.equal(session.exercises[0].sets, 2);
+  assert.deepEqual(
+    [
+      session.exercises[1].sets,
+      session.exercises[1].range,
+      session.exercises[1].rest,
+      session.exercises[1].supersetId,
+    ],
+    [3, '8–12', 90, 'g'],
+    'the new exercise takes over the targets of the slot'
+  );
+  assert.equal(session.entries[1].sets.length, 3);
+  assert.ok(session.entries[1].sets.every((s) => !s.done));
+
+  // Nothing ticked yet: it simply replaces, as before.
+  replaceSessionExercise(session, 2, { id: 'd', libraryId: '0004' });
+  assert.deepEqual(
+    session.entries.map((e) => e.exerciseId),
+    ['a', 'c', 'd']
+  );
+  assert.deepEqual(
+    session.exercises.map((x) => x.id),
+    ['a', 'c', 'd']
+  );
+});
+
 test('finishing: open sets drop out, duration ends with the last set and has a cap', async () => {
   const store = new Map();
   Object.defineProperty(globalThis, 'localStorage', {
