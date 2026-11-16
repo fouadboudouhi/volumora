@@ -77,10 +77,12 @@ const SUGGESTION_TEXT = {
 const suggestionText = (s) =>
   t(SUGGESTION_TEXT[s.kind] || SUGGESTION_TEXT.confirm, { weight: fmtWeight(s.weight), weeks: s.weeks });
 
-// The suggested weight with a button to take it over; once the open sets already hold it, only the text stays.
+// The suggested weight with a button to take it over; once the open sets already hold it, or no set is open any more,
+// only the text stays.
+const openWorkSets = (entry) => entry.sets.filter((s) => isWorkSet(s) && !s.done);
 function suggestionRow(suggest, entry, index) {
-  const open = entry.sets.filter((s) => isWorkSet(s) && !s.done);
-  const applied = open.length > 0 && open.every((s) => number(s.weight) === suggest.weight);
+  const open = openWorkSets(entry);
+  const applied = open.every((s) => number(s.weight) === suggest.weight);
   const text = `${icon('trend')}<span>${esc(suggestionText(suggest))}</span>`;
   return applied
     ? `<p class="suggest-row">${text}</p>`
@@ -571,7 +573,8 @@ export function bind() {
     b.onclick = () =>
       mutate(
         (s) =>
-          s.entries[number(b.dataset.applySuggestion)].sets.filter(isWorkSet).forEach((x) => {
+          // Ticked sets were lifted with their own weight; only what is still to come takes the suggestion.
+          openWorkSets(s.entries[number(b.dataset.applySuggestion)]).forEach((x) => {
             x.weight = String(b.dataset.weight);
           }),
         true

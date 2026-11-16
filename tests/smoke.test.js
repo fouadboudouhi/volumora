@@ -2820,6 +2820,54 @@ test('review fixes: the KI tab survives a failed upload, short workouts show no 
   assert.ok(count > 0 && count < 50, `matches counted: ${count}`);
 });
 
+test('taking over a suggestion changes only the open sets, and the button goes once none is open', async () => {
+  await seedHistory();
+  await page.evaluate(async () => {
+    const { allPlans } = await import('/src/storage.js');
+    const plan = allPlans().items[0];
+    (await import('/src/render.js')).navigate('workout', { planId: plan.id, dayId: plan.days[0].id });
+  });
+  await page.waitForSelector('button.suggest-row');
+  const index = await page.getAttribute('button.suggest-row', 'data-apply-suggestion');
+  const suggested = await page.getAttribute('button.suggest-row', 'data-weight');
+  const field = (name, set) => `[data-set-field="${name}"][data-exercise="${index}"][data-index="${set}"]`;
+  const tick = (set) => page.click(`[data-set-done="${set}"][data-exercise="${index}"]`);
+  const sets = () =>
+    page.evaluate(
+      async (i) =>
+        (await import('/src/storage.js')).getActive().entries[i].sets.map((s) => [s.weight, s.done, !!s.pr]),
+      Number(index)
+    );
+  // A first set heavier than suggested, ticked: a record that must survive taking the suggestion over.
+  await page.fill(field('weight', 0), '99');
+  await page.fill(field('reps', 0), '8');
+  await tick(0);
+  await page.waitForFunction(
+    (selector) => document.querySelector(selector)?.closest('.set-card')?.classList.contains('complete'),
+    field('weight', 0)
+  );
+  const [first] = await sets();
+  assert.deepEqual(first, ['99', true, true]);
+  await page.click('button.suggest-row');
+  const after = await sets();
+  assert.deepEqual(after[0], ['99', true, true], 'the ticked set keeps its weight and its record mark');
+  assert.ok(
+    after.slice(1).every(([weight, done]) => !done && weight === suggested),
+    `open sets take the suggestion: ${JSON.stringify(after)}`
+  );
+  // Every working set ticked with its own weight: nothing is left to take over, so no button.
+  for (let set = 1; set < after.length; set++) {
+    await page.fill(field('weight', set), '97');
+    await page.fill(field('reps', set), '8');
+    await tick(set);
+  }
+  await page.waitForFunction(
+    (i) => !document.querySelector(`button.suggest-row[data-apply-suggestion="${i}"]`),
+    index
+  );
+  assert.ok((await sets()).slice(1).every(([weight, done]) => weight === '97' && done));
+});
+
 test('home: last workout, week dots, exercise preview; progress: tabs, last-week fallback, main-muscle sets', async () => {
   await seedHistory();
   await page.setViewportSize({ width: 390, height: 844 });
