@@ -27,7 +27,16 @@ setLanguage(getSettings().language);
 runMigrations();
 // Ask the browser not to clear the data under storage pressure. It decides by itself and never asks the person.
 navigator.storage?.persist?.().catch(() => {});
-startSync();
+startSync({
+  // What another device saved has arrived and is merged in. It shows at once, except under an open sheet or while
+  // something is being typed: there it appears with the next screen.
+  onNews: () => {
+    toast(t('sync.news'));
+    if (document.querySelector('.sheet-backdrop')) return;
+    if (document.activeElement?.matches?.('input, textarea, select')) return;
+    render();
+  },
+});
 // Every start tells the server again which app this is: a record made against an older server, or a push
 // endpoint the phone has since changed, would otherwise keep the rest signal from arriving.
 if (getSettings().restNotify) enablePush();

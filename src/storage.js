@@ -381,6 +381,13 @@ export const SCHEMA_VERSION = MIGRATIONS.length;
 
 // A fresh installation: no plans yet and the first-run flow has not run. It seeds the plan itself.
 export const needsOnboarding = () => !isOnboarded() && !localStorage.getItem(LS.plans);
+// Whether a person has made or set up anything here. A device without it has nothing to lose when someone signs in,
+// and nothing that could end up in the wrong account.
+export const hasPersonalData = () =>
+  !needsOnboarding() ||
+  !!getActive() ||
+  hasAiKey() ||
+  [LS.history, LS.body, LS.customExercises, LS.aiChat, LS.aiMemory].some((key) => read(key, []).length > 0);
 
 export function runMigrations() {
   if (!localStorage.getItem(LS.settings)) saveSettings(DEFAULT_SETTINGS);
