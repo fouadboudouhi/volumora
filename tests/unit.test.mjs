@@ -1722,6 +1722,26 @@ test('a spoken or typed set becomes its values', async () => {
   assert.deepEqual(parseSet('60', 'time'), { time: 60 });
   assert.deepEqual(parseSet('5 km in 25 Minuten', 'distance_time'), { distance: 5, time: 1500 });
   assert.deepEqual(parseSet('fünf Kilometer', 'distance_time'), { distance: 5 });
+  // Without unit words the values known for this set decide which number is the weight: light dumbbells and cables
+  // have fewer kilos than reps.
+  const light = { weight: 10, reps: 12 };
+  assert.deepEqual(parseSet('10 x 12', 'weight_reps', light), { weight: 10, reps: 12 });
+  assert.deepEqual(parseSet('12 mal 10', 'weight_reps', light), { weight: 10, reps: 12 });
+  assert.deepEqual(parseSet('8 mal 15', 'weight_reps', light), { weight: 8, reps: 15 });
+  assert.deepEqual(parseSet('acht mal fünfzehn', 'weight_reps', { weight: 7.5 }), { weight: 8, reps: 15 });
+  const heavy = { weight: 60, reps: 10 };
+  assert.deepEqual(parseSet('12 mal 60', 'weight_reps', heavy), { weight: 60, reps: 12 });
+  assert.deepEqual(parseSet('60 x 12', 'weight_reps', heavy), { weight: 60, reps: 12 });
+  assert.deepEqual(parseSet('10 x 12', 'weight_reps', {}), { weight: 12, reps: 10 }, 'nothing known: larger');
+  assert.deepEqual(parseSet('12 x 12', 'weight_reps', light), { weight: 12, reps: 12 });
+  assert.deepEqual(parseSet('7,5 x 15', 'weight_reps', { weight: 20, reps: 8 }), { weight: 7.5, reps: 15 });
+  assert.deepEqual(
+    parseSet('60', 'weight_reps', heavy),
+    { weight: 60 },
+    'one number goes to the closer value'
+  );
+  assert.deepEqual(parseSet('10', 'weight_reps', heavy), { reps: 10 });
+  assert.deepEqual(parseSet('10 Kilo 12', 'weight_reps', { weight: 12, reps: 10 }), { weight: 10, reps: 12 });
 });
 
 test('cost, search and citations: paid searches are counted, a refused search tool does not stop the chat', async () => {

@@ -1981,6 +1981,61 @@ test('a workout set can be said, with the field as the way that always works', a
   assert.equal(await page.locator('#dictateMic.listening').count(), 0);
 });
 
+test('a said set reads light weights by what is known, waits for both values and can be undone', async () => {
+  await page.click('.next-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await page.fill('[data-set-field="weight"][data-exercise="0"][data-index="0"]', '10');
+  await page.fill('[data-set-field="reps"][data-exercise="0"][data-index="0"]', '12');
+  await page.click('[data-set-done="0"][data-exercise="0"]');
+  const sets = () =>
+    page.evaluate(() =>
+      JSON.parse(localStorage.getItem('volumora-active-v2')).entries[0].sets.map((s) => [
+        s.weight,
+        s.reps,
+        s.done,
+      ])
+    );
+  const say = (transcript) =>
+    page.evaluate((text) => {
+      delete window.SpeechRecognition;
+      navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [{ stop() {} }] });
+      window.webkitSpeechRecognition = class {
+        start() {
+          setTimeout(() => {
+            this.onstart?.();
+            this.onresult?.({ results: [Object.assign([{ transcript: text }], { isFinal: true })] });
+          }, 10);
+        }
+        stop() {
+          this.onend?.();
+        }
+      };
+    }, transcript);
+  // "10 x 12" after a set of 10 kg × 12 is 10 kg, not 12 kg × 10.
+  await say('10 x 12');
+  await page.click('[data-dictate="0"]');
+  await page.waitForFunction(
+    () => JSON.parse(localStorage.getItem('volumora-active-v2')).entries[0].sets[1].done
+  );
+  assert.deepEqual((await sets())[1], ['10', '12', true]);
+  await page.waitForSelector('#dictateInput', { state: 'detached' });
+  assert.match(await page.textContent('.toast'), /Eingetragen: 10 kg × 12/);
+  await page.click('.toast-action');
+  await page.waitForFunction(
+    () => !JSON.parse(localStorage.getItem('volumora-active-v2')).entries[0].sets[1].done
+  );
+  assert.equal((await sets())[1][2], false, 'undone');
+  // Half a set is shown, but not logged by itself.
+  await say('60 Kilo');
+  await page.click('[data-dictate="0"]');
+  await page.waitForFunction(() =>
+    document.querySelector('.dictate-state')?.textContent.includes('Gewicht und Wiederholungen')
+  );
+  assert.match(await page.textContent('.dictate-state'), /60 kg/);
+  assert.equal((await sets())[1][2], false);
+  assert.equal(await page.locator('#dictateInput').count(), 1, 'the sheet stays open');
+});
+
 test('the assistant knows the running workout, the summary and what it remembers', async () => {
   await seedHistory();
   await addAiKey();

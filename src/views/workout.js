@@ -20,7 +20,7 @@ import { state } from '../state.js';
 import { clearActive, getActive, getSettings, saveActive, saveRestUntil, saveSettings } from '../storage.js';
 import { actionSheet, confirmDialog, sheet, toast, undoToast } from '../ui.js';
 import { fmtWeight, fromDisplay, toDisplay, unit } from '../units.js';
-import { esc, isWorkSet, number } from '../util.js';
+import { clone, esc, isWorkSet, number } from '../util.js';
 import {
   activeSession,
   addSessionExercise,
@@ -323,7 +323,21 @@ function tickSet(exerciseIndex, setIndex, values) {
   if (record) toast(t('workout.record', { set: describeSet(record, recordType) }), { duration: 4000 });
 }
 
-// Saying a set fills the next open one and ticks it, the same as tapping its check.
+// What the set about to be said should hold: its typed values, else the grey ones, else the last set ticked.
+function expectedValues(entry, setIndex, ex) {
+  const last = previousWork(ex);
+  const target = entry.sets[setIndex];
+  const grey =
+    setIndex >= 0
+      ? setReference(entry, setIndex, last)
+      : [...entry.sets].reverse().find((s) => s.done && isWorkSet(s)) || last[last.length - 1];
+  const weight = number(target?.weight) || number(grey?.weight);
+  const reps = number(target?.reps) || number(grey?.reps);
+  return { weight: weight ? toDisplay(weight) : null, reps: reps || null };
+}
+
+// Saying a set fills the next open one and ticks it, the same as tapping its check. Nothing asks for a confirmation,
+// so the toast says what was logged and can take it back.
 function dictateSet(exerciseIndex) {
   const entry = current().entries[exerciseIndex];
   const trackType = entryTrackType(entry);
@@ -335,9 +349,15 @@ function dictateSet(exerciseIndex) {
       n: before.filter(isWorkSet).length + 1,
     }),
     trackType,
+    known: expectedValues(entry, setIndex, exerciseAt(exerciseIndex)),
     onValues: (spoken) => {
+      let previous = null;
+      let added = false;
       mutate((s) => {
+        const count = s.entries[exerciseIndex].sets.length;
         setIndex = nextOpenSet(s, exerciseIndex);
+        added = s.entries[exerciseIndex].sets.length > count;
+        previous = clone(s.entries[exerciseIndex].sets[setIndex]);
       });
       const values = {
         ...spoken,
@@ -345,7 +365,18 @@ function dictateSet(exerciseIndex) {
       };
       tickSet(exerciseIndex, setIndex, values);
       const done = current().entries[exerciseIndex].sets[setIndex];
-      if (!done?.done) toast(t('workout.enterValues'));
+      if (!done?.done) {
+        toast(t('workout.enterValues'));
+        return;
+      }
+      const set = describeSet(done, trackType);
+      undoToast(done.pr ? t('workout.record', { set }) : t('dictate.logged', { set }), () =>
+        mutate((s) => {
+          const sets = s.entries[exerciseIndex].sets;
+          if (added) sets.splice(setIndex, 1);
+          else sets[setIndex] = previous;
+        }, true)
+      );
     },
   });
 }

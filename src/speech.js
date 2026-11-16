@@ -114,8 +114,26 @@ function secondsIn(text) {
   return minutes || seconds ? Math.round(Number(minutes?.[1] || 0) * 60 + Number(seconds?.[1] || 0)) : null;
 }
 
-// Weights stay in the unit the person trains with. Returns null when nothing usable was said.
-export function parseSet(text, trackType = 'weight_reps') {
+// How far a reading lies from what is known for the set, relative to it; null when nothing is known to compare with.
+function distance(weight, reps, known) {
+  const parts = [
+    [weight, known?.weight],
+    [reps, known?.reps],
+  ].filter(([value, ref]) => value !== null && Number(ref) > 0);
+  return parts.length ? parts.reduce((sum, [value, ref]) => sum + Math.abs(value - ref) / ref, 0) : null;
+}
+// Whether the first of two bare numbers is the weight. "10 x 12" can be 10 kg × 12 on a dumbbell or 12 kg × 10, so the
+// reading closer to the values known for this set wins; only without them does the larger number count as the weight.
+function firstIsWeight(a, b, known) {
+  if (Number.isInteger(a) !== Number.isInteger(b)) return !Number.isInteger(a);
+  const asSaid = distance(a, b, known);
+  const swapped = distance(b, a, known);
+  return asSaid !== null && asSaid !== swapped ? asSaid < swapped : a >= b;
+}
+
+// Weights stay in the unit the person trains with, and so does `known` ({ weight, reps } this set is expected to
+// hold, from the grey values or the last session). Returns null when nothing usable was said.
+export function parseSet(text, trackType = 'weight_reps', known = null) {
   let rest = normalize(text);
   const take = (pattern) => {
     const match = rest.match(pattern);
@@ -146,11 +164,18 @@ export function parseSet(text, trackType = 'weight_reps') {
     return reps ? { reps, ...(weight ? { weight } : {}) } : null;
   }
   if (weight === null && reps === null && bare.length >= 2) {
-    // "12 mal 60" or "60 x 12": the larger number is the weight, unless a decimal gives it away.
+    // "12 mal 60" or "60 x 12": a decimal gives the weight away, otherwise see firstIsWeight.
     const [a, b] = bare;
-    const aIsWeight = !Number.isInteger(a) || (Number.isInteger(b) && a >= b);
+    const aIsWeight = firstIsWeight(a, b, known);
     weight = aIsWeight ? a : b;
     reps = aIsWeight ? b : a;
+  } else if (weight === null && reps === null && bare.length) {
+    // One number alone is the reps, unless it lies closer to the known weight than to the known reps.
+    const [n] = bare;
+    const asWeight = distance(n, null, known);
+    const asReps = distance(null, n, known);
+    if (asWeight !== null && asReps !== null && asWeight < asReps) weight = n;
+    else reps = n;
   } else if (reps === null && bare.length) reps = bare[0];
   else if (weight === null && bare.length) weight = bare[0];
   if (!reps && !weight) return null;
