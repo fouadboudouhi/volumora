@@ -1771,6 +1771,46 @@ test('an assistant change the device could not store reaches Claude as an error,
   delete globalThis.requestAnimationFrame;
 });
 
+test('body entries are stored newest first by their date, however they got in', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const { runTool } = await import('../src/aiTools.js');
+  const { getBody, saveBody } = await import('../src/storage.js');
+  const { weightPoints } = await import('../src/charts.js');
+  const entry = (id, day, weight) => ({ id, day, date: `${day}T12:00:00.000Z`, weight });
+  // The form puts a new entry in front, whatever its date.
+  saveBody([
+    entry('late', '2026-09-01', 85.5),
+    entry('b', '2026-11-14', 81.3),
+    entry('c', '2026-11-07', 81.7),
+  ]);
+  assert.deepEqual(
+    getBody().map((e) => e.id),
+    ['b', 'c', 'late']
+  );
+  await runTool('add_body_entry', { date: '2026-10-01', weight: 83 }, { confirm: async () => true });
+  assert.deepEqual(
+    getBody().map((e) => e.day),
+    ['2026-11-14', '2026-11-07', '2026-10-01', '2026-09-01']
+  );
+  assert.deepEqual(
+    weightPoints('all').map((p) => p.value),
+    [85.5, 83, 81.7, 81.3],
+    'the chart ends with the newest value'
+  );
+  // An entry without a day key (from before day keys existed) is placed by its timestamp.
+  saveBody([{ id: 'old', date: '2026-08-01T12:00:00.000Z', weight: 90 }, ...getBody()]);
+  assert.equal(getBody().at(-1).id, 'old');
+  saveBody([]);
+});
+
 test('a spoken or typed set becomes its values', async () => {
   const { parseSet } = await import('../src/speech.js');
   const cases = [

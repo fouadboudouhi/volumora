@@ -110,7 +110,15 @@ export const saveHistory = (history) => {
   return write(LS.history, history);
 };
 export const getBody = () => read(LS.body, []);
-export const saveBody = (entries) => write(LS.body, entries);
+// Kept newest first by date here, the one place every entry passes (form, assistant, import, restore), so a value
+// added for an earlier day lands in its place in the list, the chart and what the assistant reads. Entries of the
+// same day keep their order.
+const bodyDay = (entry) => entry?.day || (entry?.date ? dayKey(entry.date) : '');
+export const saveBody = (entries) =>
+  write(
+    LS.body,
+    [...entries].sort((a, b) => bodyDay(b).localeCompare(bodyDay(a)))
+  );
 export const getPrefs = () => ({ favorites: [], recent: [], ...read(LS.exercisePrefs, {}) });
 export const savePrefs = (prefs) => write(LS.exercisePrefs, prefs);
 
