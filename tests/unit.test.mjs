@@ -917,6 +917,33 @@ test('Strong export: pounds become kilograms, timer and note rows are skipped, w
   assert.equal(parseImport('a,b\n1,2\n').source, null);
 });
 
+test('current Strong export: units in the header, duration in seconds, distance in metres', () => {
+  const parsed = parseImport(readFileSync(new URL('./fixtures/strong-2024.csv', import.meta.url), 'utf8'), {
+    unit: 'lbs',
+  });
+  assert.equal(parsed.source, 'strong');
+  assert.equal(parsed.unitAssumed, false, 'the header says kilograms, so nothing is assumed');
+  const push = parsed.sessions[1];
+  assert.deepEqual([push.dayName, push.duration, push.totalSets], ['Push Day', 4320, 3]);
+  assert.deepEqual(
+    push.entries.map((e) => e.sets.map((x) => `${x.type}:${x.weight}x${x.reps}`).join(' ')),
+    ['normal:82.5x8 normal:82.5x8', 'warmup:60x5 normal:100x5']
+  );
+  const run = parsed.sessions[0];
+  assert.equal(run.duration, 1500);
+  assert.deepEqual(
+    [run.entries[0].trackType, run.entries[0].sets[0].distance, run.entries[0].sets[0].time],
+    ['distance_time', 5, 1500]
+  );
+  const pounds = parseImport(
+    'Date,Workout Name,Duration (sec),Exercise Name,Set Order,Weight (lbs),Reps,Distance (miles),Seconds\n2024-10-12 10:03:00,Legs,2700,Squat (Barbell),1,100,5,0,0\n2024-10-12 10:03:00,Legs,2700,Running,1,0,0,2,900\n'
+  );
+  assert.equal(pounds.unitAssumed, false);
+  assert.equal(pounds.sessions[0].duration, 2700);
+  assert.equal(pounds.sessions[0].entries[0].sets[0].weight, 45.359);
+  assert.equal(pounds.sessions[0].entries[1].sets[0].distance, 3.219);
+});
+
 test('merging an import skips sessions already there and creates each unknown exercise once', () => {
   const text = readFileSync(new URL('./fixtures/hevy.csv', import.meta.url), 'utf8');
   const once = mergeImport([], [], parseImport(text));
