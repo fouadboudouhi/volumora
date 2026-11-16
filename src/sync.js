@@ -359,6 +359,9 @@ async function mergeSnapshot(config, { version, data }) {
     const keep = Object.fromEntries(
       Object.keys(PIECES).map((name) => [name, !steady || (pending && config.marks?.[name] !== marks[name])])
     );
+    // Before the first-run flow is through no plan is stored, and the default one is made up anew each time it is
+    // read. That is no change made here, and it must never go over the plans the account holds.
+    if (!localStorage.getItem(LS.plans)) keep.plans = false;
     // Stored in one go, right after the decision: nothing the person does can come in between.
     applying = true;
     let photosStored;

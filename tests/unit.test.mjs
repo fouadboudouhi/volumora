@@ -2364,9 +2364,11 @@ test('a second device sees new workouts by itself, and what both devices changed
     st.saveHistory([workoutOn('w3', '2026-11-05'), ...st.getHistory()]);
     st.savePlans({ ...st.allPlans(), items: st.allPlans().items.map((p) => ({ ...p, name: 'Umbenannt' })) });
     st.saveCustomExercises([{ id: 'c1', name: 'Eigene Übung', category: 'other', equipment: 'other' }]);
+    st.saveAiChat([{ role: 'user', text: 'Am Handy gefragt' }]);
     assert.equal(await sync.uploadNow(), true);
     app.use(tablet);
     st.saveSettings({ ...st.getSettings(), weeklyGoal: 4 });
+    st.saveAiMemory(['Am Tablet gemerkt']);
     st.saveBody([{ id: 'b1', date: '2026-11-06T07:00:00.000Z', day: '2026-11-06', weight: 80 }]);
     st.saveActive({ id: 'running', dayName: 'Läuft gerade', entries: [] });
     // The tablet goes to the background: what changed is uploaded right away, and the server refuses it.
@@ -2392,6 +2394,13 @@ test('a second device sees new workouts by itself, and what both devices changed
       merged.body.map((b) => b.id),
       ['b1']
     );
+    const both = (await storedFor(s, 'anna')).data;
+    assert.deepEqual(
+      [both.aiChat[0].text, both.aiMemory],
+      ['Am Handy gefragt', ['Am Tablet gemerkt']],
+      'chat and memory each come from the device that changed them'
+    );
+    assert.equal(st.getAiChat()[0].text, 'Am Handy gefragt');
     assert.deepEqual(ids(), ['w3', 'w2', 'w1']);
     assert.equal(planName(), 'Umbenannt');
     assert.equal(st.getCustomExercises()[0].id, 'c1');
@@ -2419,6 +2428,7 @@ test('a second device sees new workouts by itself, and what both devices changed
     assert.deepEqual(ids(), ['w3', 'w2', 'w1']);
     assert.equal(planName(), 'Umbenannt');
     assert.equal(st.getBody()[0].id, 'b1');
+    assert.deepEqual(st.getAiMemory(), ['Am Tablet gemerkt']);
     assert.equal((await storedFor(s, 'anna')).versions, versions, 'both hold the same now: nothing goes up');
     // With nothing new on the server the question is all that is sent: no data comes down.
     Date.now = () => later + 5 * 60000;
@@ -2537,6 +2547,45 @@ test('signing in again after the sign-in was lost keeps the workouts made meanwh
     assert.deepEqual(ids(), ['a4', 'a3', 'a2', 'a1']);
     await sync.syncNow();
     assert.equal((await storedFor(s, 'anna')).data.backup.history[0].id, 'a4');
+    await sync.signOut();
+  } finally {
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('a device still in the first-run flow has no plan of its own to put over the account’s', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const first = new Map();
+  const second = new Map();
+  try {
+    // Registered, but the first-run flow is not finished: no plan is stored, the app shows the default one.
+    app.use(first);
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    // Meanwhile another device signs in, sets itself up with a plan of its own and trains.
+    app.use(second);
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    await app.setUp();
+    st.savePlans({
+      ...st.allPlans(),
+      items: st.allPlans().items.map((p) => ({ ...p, name: 'Echter Plan' })),
+    });
+    st.saveHistory([workoutOn('w1', '2026-11-01')]);
+    await sync.syncNow();
+    // The first device hears of it. The default plan it shows is no change made there: the account's plan stays.
+    app.use(first);
+    await sync.syncNow({ look: true });
+    assert.equal(st.allPlans().items[0].name, 'Echter Plan');
+    assert.deepEqual(
+      st.getHistory().map((h) => h.id),
+      ['w1']
+    );
+    assert.equal((await storedFor(s, 'anna')).data.backup.plans.items[0].name, 'Echter Plan');
     await sync.signOut();
   } finally {
     app.done();
