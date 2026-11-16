@@ -813,6 +813,38 @@ test('progression: stall detection, per-exercise increment and 1RM reps table', 
   ];
   assert.equal(stalled(ex, rising), false);
   assert.equal(suggestion(ex, rising, today).kind, 'confirm');
+  // Double progression: the first set stays at 10 reps, the later sets catch up. More reps at the same weight is
+  // progress, so neither the workout screen nor Heute (both via suggestion) may call it stalled.
+  const sets = (reps) => reps.map((r) => ({ weight: '60', reps: String(r), done: true, type: 'normal' }));
+  const multi = (id, day, reps) => ({
+    ...session(id, day, 60, 10),
+    entries: [{ ...session().entries[0], sets: sets(reps) }],
+  });
+  const doubleProgression = [
+    multi('c', '2026-03-03', [10, 10, 9]),
+    multi('b', '2026-02-24', [10, 9, 8]),
+    multi('a', '2026-02-17', [10, 8, 7]),
+  ];
+  assert.equal(stalled(ex, doubleProgression), false, 'more reps in the later sets');
+  assert.notEqual(suggestion(ex, doubleProgression, today).kind, 'stall');
+  const sameWork = [
+    multi('c', '2026-03-03', [10, 9, 8]),
+    multi('b', '2026-02-24', [10, 8, 9]),
+    multi('a', '2026-02-17', [10, 9, 8]),
+  ];
+  assert.equal(stalled(ex, sameWork), true, 'the same reps in another order are no progress');
+  const { deloadHint } = await import('../src/deload.js');
+  const across = (list) =>
+    list.map((s) => ({
+      ...s,
+      entries: ['0025', '0026', '0027'].map((libraryId) => ({
+        ...s.entries[0],
+        exerciseId: libraryId,
+        libraryId,
+      })),
+    }));
+  assert.equal(deloadHint(across(sameWork), today)?.reason, 'stall', 'Heute counts real stalls');
+  assert.equal(deloadHint(across(doubleProgression), today), null, 'Heute does not count double progression');
   const topOfRange = [session('c', '2026-03-03', 60, 12)];
   assert.equal(suggestion(ex, topOfRange, today).weight, 62.5, 'default increment');
   assert.equal(

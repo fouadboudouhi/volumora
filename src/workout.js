@@ -28,6 +28,7 @@ import {
   rangeMid,
   rangeMin,
   setsCount,
+  setVolume,
   uid,
   volumeOf,
 } from './util.js';
@@ -356,15 +357,26 @@ export function recentEntries(ex, limit = 3, history = getHistory()) {
   return rows;
 }
 const bestScoreOf = (entry) => Math.max(0, ...entry.sets.map((s) => setScore(s, entryTrackType(entry))));
+// All the work of the logged sets: the volume for weight × reps, otherwise the summed reps, seconds or kilometres.
+function workOf(entry) {
+  const type = entryTrackType(entry);
+  return loggedSets(entry).reduce(
+    (sum, s) => sum + (type === 'weight_reps' ? setVolume(s) : setScore(s, type)),
+    0
+  );
+}
 
-// Three sessions in a row without a better estimated 1RM, close to the all-time best: time for a lighter week.
-// Sessions already well below the best are that lighter week, so the advice cannot spiral downwards.
+// Three sessions in a row without a better estimated 1RM and without more work, close to the all-time best: time for
+// a lighter week. The work counts too, because adding reps in the later sets at the same weight (double progression)
+// is progress although the best set stays the same. Sessions already well below the best are that lighter week, so
+// the advice cannot spiral downwards.
 export function stalled(ex, history = getHistory()) {
-  const all = recentEntries(ex, Infinity, history).map(bestScoreOf);
+  const entries = recentEntries(ex, Infinity, history);
+  const all = entries.map(bestScoreOf);
   const recent = all.slice(0, 3);
   if (recent.length < 3 || recent.some((v) => !v)) return false;
-  const [newest, middle, oldest] = recent;
-  return newest <= oldest && middle <= oldest && newest >= Math.max(...all) * 0.95;
+  const flat = ([newest, middle, oldest]) => newest <= oldest && middle <= oldest;
+  return flat(recent) && flat(entries.slice(0, 3).map(workOf)) && recent[0] >= Math.max(...all) * 0.95;
 }
 
 const DAY_MS = 86400000;
