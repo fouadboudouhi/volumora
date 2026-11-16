@@ -2426,6 +2426,20 @@ test('a second device sees new workouts by itself, and what both devices changed
     app.handlers.visibilitychange();
     await sync.syncNow();
     assert.deepEqual(app.calls, ['GET /v1/snapshots']);
+    // Opened without a connection: nothing is waiting here, so that is no problem to report. The question is
+    // asked again as soon as the connection is back.
+    const online = globalThis.fetch;
+    globalThis.fetch = () => Promise.reject(new TypeError('offline'));
+    Date.now = () => later + 10 * 60000;
+    app.handlers.visibilitychange();
+    await sync.syncNow();
+    assert.equal(sync.syncConfig().problem || '', '');
+    globalThis.fetch = online;
+    app.calls.length = 0;
+    app.handlers.online();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await sync.syncNow();
+    assert.deepEqual(app.calls, ['GET /v1/snapshots']);
 
     // The app is in use while a merge runs: a setting changed at that very moment is neither overwritten by the
     // server's nor forgotten.
@@ -2441,7 +2455,7 @@ test('a second device sees new workouts by itself, and what both devices changed
       st.saveSettings({ ...st.getSettings(), weeklyGoal: 6 });
       return subtle.digest(...args);
     };
-    Date.now = () => later + 10 * 60000;
+    Date.now = () => later + 15 * 60000;
     app.handlers.visibilitychange();
     await app.until(
       async () => (await storedFor(s, 'anna')).data.backup.settings.weeklyGoal === 6,

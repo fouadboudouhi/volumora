@@ -2696,14 +2696,31 @@ test('a second device gets new workouts by itself, and signing in again after a 
     await tablet.waitForSelector('.next-card');
     assert.deepEqual(await workouts(tablet), ['Erstes vom Handy']);
 
-    // The phone trains. The tablet is opened again and shows the workout without anyone doing anything.
+    // The phone trains and weighs in with a photo. The tablet is opened again and shows the workout without
+    // anyone doing anything; the photo is there too.
     await train(page, 'Zweites vom Handy', '2026-11-04');
-    await page.evaluate(async () => (await import('/src/sync.js')).uploadNow());
+    await page.evaluate(
+      async (photo) => {
+        const { photos, saveBody } = await import('/src/storage.js');
+        await photos.set('wiegen', photo);
+        saveBody([
+          { id: 'wiegen', date: '2026-11-04T07:00:00.000Z', day: '2026-11-04', weight: 80, hasPhoto: true },
+        ]);
+        await (await import('/src/sync.js')).uploadNow();
+      },
+      `data:image/png;base64,${PNG.toString('base64')}`
+    );
     await tablet.reload();
     await tablet.waitForFunction(() =>
       /Zweites vom Handy/.test(document.querySelector('[data-last-session]')?.textContent || '')
     );
     assert.deepEqual(await workouts(tablet), ['Zweites vom Handy', 'Erstes vom Handy']);
+    const weighed = await tablet.evaluate(async () => {
+      const { photos, getBody } = await import('/src/storage.js');
+      return { entry: getBody()[0], photo: await photos.get('wiegen') };
+    });
+    assert.equal(weighed.entry.hasPhoto, true);
+    assert.match(weighed.photo, /^data:image\/png;base64,/);
 
     // The server forgets every sign-in. The tablet is used on, and the app notices when it tries to save.
     await server.db.setPassword('anna', 'neues-passwort-1');

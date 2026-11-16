@@ -401,7 +401,7 @@ async function mergeSnapshot(config, { version, data }) {
 // seen, and merges it in. Then what changed here is uploaded. An upload the server refuses because another device
 // was faster is answered the same way: merge, then upload again. Nobody has to choose which side to lose.
 async function exchange(config, { look = false, force = false } = {}) {
-  const done = { merged: false, uploaded: false };
+  const done = { merged: false, uploaded: false, asked: false };
   if (!config || restoring) return done;
   const bringIn = async () => {
     const found = await fetchSnapshot(config);
@@ -410,7 +410,12 @@ async function exchange(config, { look = false, force = false } = {}) {
     config = syncConfig() || config;
   };
   if (look) {
-    const latest = await latestVersion(config);
+    // Without a connection the question simply stays open (`asked`): that alone is no problem worth reporting,
+    // and what is waiting here is still tried below.
+    const latest = await latestVersion(config).catch((err) => {
+      if (err.code !== 'network') throw err;
+    });
+    done.asked = latest !== undefined;
     // A server that holds nothing gets what is here, whatever this device believes it uploaded before.
     if (latest === '') force = true;
     else if (latest && latest !== config.version) await bringIn();
@@ -425,7 +430,7 @@ async function exchange(config, { look = false, force = false } = {}) {
     }
   }
 }
-// The exchange the app runs by itself and behind "save now": { merged, uploaded } say what it did.
+// The exchange the app runs by itself and behind "save now": { merged, uploaded, asked } say what it did.
 export const syncNow = (options) => inTurn(() => exchange(syncConfig(), options));
 
 // What a sign-in as `account` ({ url, username }) meets on this device: nothing ('none'), this account's own data
@@ -491,10 +496,12 @@ const quietly = async () => {
   if (look) looked = Date.now();
   let merged = false;
   try {
-    ({ merged } = await syncNow({ look }));
+    const done = await syncNow({ look });
+    merged = done.merged;
+    // A question that got no answer is asked again with the next exchange.
+    lookDue ||= look && !done.asked;
     if (syncConfig()?.problem) update({ problem: '', latest: '' });
   } catch (err) {
-    // A question that got no answer is asked again with the next exchange.
     lookDue ||= look;
     update({ problem: err.code || 'server', latest: err.latest || '' });
   }
