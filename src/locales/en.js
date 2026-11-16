@@ -1262,7 +1262,7 @@ export default {
   'ai.error.aborted': 'Cancelled.',
   'settings.aiAdd': 'Add Claude key',
   'settings.aiHint':
-    'Optional. Your server does not offer an assistant right now. With a key of your own your questions go directly to Anthropic.',
+    'Optional. No assistant is available through your server right now. If your sign-in has expired, sign in again. With a key of your own your questions go directly to Anthropic.',
   // Suggestions and replacements
   'workout.suggestComeback': 'After {weeks} weeks off: restart with {weight}',
   'workout.suggestReduce': 'Twice below the target range: better {weight}',

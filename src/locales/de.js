@@ -1280,7 +1280,7 @@ export default {
   'ai.error.aborted': 'Abgebrochen.',
   'settings.aiAdd': 'Claude-Schlüssel eintragen',
   'settings.aiHint':
-    'Optional. Dein Server bietet gerade keinen Assistenten an. Mit einem eigenen Schlüssel gehen deine Fragen direkt an Anthropic.',
+    'Optional. Gerade steht über deinen Server kein Assistent bereit. Ist deine Anmeldung abgelaufen, melde dich neu an. Mit einem eigenen Schlüssel gehen deine Fragen direkt an Anthropic.',
   // Vorschläge und Ersatz
   'workout.suggestComeback': 'Nach {weeks} Wochen Pause: Einstieg mit {weight}',
   'workout.suggestReduce': 'Zweimal unter dem Zielbereich: besser {weight}',

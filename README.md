@@ -95,7 +95,7 @@ Die Erinnerung zum Pausenende kommt als Push-Nachricht vom Server, der dafür di
 „Alle Daten löschen“ in den Einstellungen entfernt alles von diesem Gerät und meldet ab; die Sicherung im Konto bleibt. Ein Konto löschen kann die App nicht, das macht die Person, die den Server betreibt (`admin.js delete-user`). Zusätzlich gibt es den JSON-Export als Datei; er enthält auch die Fotos aus IndexedDB, aber weder Chat noch Schlüssel. Beim Import werden alle Werte geprüft und auf das erwartete Format gebracht.
 
 ## Betrieb
-Die App ist statisch: GitHub Pages veröffentlicht den Stand von `main`, ohne Build-Schritt. Der Sync-Server läuft getrennt davon als Docker-Container beim Betreiber und nimmt nur Anfragen von den Adressen in `ALLOWED_ORIGINS` an; Einrichtung und Verwaltung stehen in [`sync-server/README.md`](sync-server/README.md).
+Die App ist statisch: GitHub Pages veröffentlicht den Stand von `main`, ohne Build-Schritt. Der Sync-Server läuft getrennt davon als Docker-Container beim Betreiber; nur Seiten von den Adressen in `ALLOWED_ORIGINS` dürfen im Browser seine Antworten lesen (CORS); Einrichtung und Verwaltung stehen in [`sync-server/README.md`](sync-server/README.md).
 
 ## Lizenz
 Der Quellcode steht unter der [MIT-Lizenz](LICENSE). Übungsanimationen und andere Medien von Dritten sind davon ausgenommen und gehören ihren jeweiligen Rechteinhabern, siehe [`THIRD_PARTY_ASSETS.md`](THIRD_PARTY_ASSETS.md).

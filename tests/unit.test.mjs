@@ -430,6 +430,13 @@ test('first-run, sign-in and assistant hints do not promise an app without accou
       assert.doesNotMatch(dict[key], stale, `${key} in ${name}`);
     // After signing out the app shows only the sign-in screen.
     assert.match(dict['sync.offText'], /wieder anmelden|sign in again/, `sync.offText in ${name}`);
+    // The hint also shows when only the sign-in expired (aiAccess.js), so it may not claim the server has no assistant.
+    assert.doesNotMatch(
+      dict['settings.aiHint'],
+      /bietet.*keinen Assistenten|does not offer/,
+      `settings.aiHint in ${name}`
+    );
+    assert.match(dict['settings.aiHint'], /neu an|sign in again/, `settings.aiHint in ${name}`);
   }
 });
 
@@ -482,6 +489,8 @@ test('the README and the sync and Claude modules describe the app with account a
   const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
   const readme = file('README.md');
   assert.doesNotMatch(readme, /keinen Account|kein Backend|Lokale Speicherung im Browser/);
+  // ALLOWED_ORIGINS only decides the CORS headers (server.js); requests from elsewhere are still processed.
+  assert.doesNotMatch(readme, /nimmt nur Anfragen/);
   for (const fact of [/Konto/, /Einladungscode/, /DEFAULT_SYNC_URL/, /Monatsbudget/, /Push/, /GitHub Pages/])
     assert.match(readme, fact);
   const head = (path) => file(path).split('\n').slice(0, 4).join('\n');
