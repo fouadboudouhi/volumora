@@ -477,6 +477,22 @@ test('the privacy text says what goes to the server and to Anthropic, and never 
   }
 });
 
+// The README and the file headers are what a reader trusts first; they still described an app without server.
+test('the README and the sync and Claude modules describe the app with account and server', () => {
+  const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const readme = file('README.md');
+  assert.doesNotMatch(readme, /keinen Account|kein Backend|Lokale Speicherung im Browser/);
+  for (const fact of [/Konto/, /Einladungscode/, /DEFAULT_SYNC_URL/, /Monatsbudget/, /Push/, /GitHub Pages/])
+    assert.match(readme, fact);
+  const head = (path) => file(path).split('\n').slice(0, 4).join('\n');
+  assert.doesNotMatch(head('src/sync.js'), /Optional|Off unless/);
+  assert.doesNotMatch(
+    head('src/ai.js'),
+    /straight from\n?.*this browser to Anthropic, with the person's own key/
+  );
+  assert.doesNotMatch(head('sync-server/README.md'), /^Optional\./m);
+});
+
 test('exercise names resolve per language for library, built-in and custom exercises', () => {
   setLanguage('de');
   assert.equal(exerciseName({ id: 'x', libraryId: '0025', name: 'alt' }), 'Bankdrücken mit Langhantel');

@@ -1,6 +1,6 @@
 # Volumora — Training & Fortschritt
 
-Offline-fähige, installierbare Fitness-PWA für frei konfigurierbare Trainingspläne.
+Offline-fähige, installierbare Fitness-PWA für frei konfigurierbare Trainingspläne. Zum Nutzen braucht man ein Konto auf einem Sync-Server (`sync-server/`), der die Daten sichert und den KI-Assistenten bereitstellt. Eine Vorschau mit Beispieldaten ohne Konto und ohne Server gibt es unter `demo.html`.
 
 Die visuellen Regeln sind in [`DESIGN.md`](DESIGN.md) dokumentiert, im neunteiligen DESIGN.md-Format, damit auch KI-Werkzeuge konsistent daran weiterbauen.
 
@@ -29,7 +29,7 @@ Die visuellen Regeln sind in [`DESIGN.md`](DESIGN.md) dokumentiert, im neunteili
 - Dark Mode, Favoriten sowie Deload-, Krankheits- und Schmerzmarker
 - Wochenübersicht und Monatskalender mit Monatsnavigation für geplante und abgeschlossene Einheiten
 - Professionelle Übungsanimationen aus einem kuratierten Übungsdatensatz
-- Lokale Speicherung im Browser (`localStorage`)
+- Speicherung im Browser (`localStorage`, Fotos in IndexedDB) und automatische Sicherung im Konto auf dem Sync-Server
 - PWA-Manifest + Service Worker für Offline-Nutzung
 - iPhone-freundliche Safe-Area und Homescreen-Nutzung
 
@@ -44,12 +44,16 @@ Kein Build-Schritt, kein Framework: `index.html` lädt `src/app.js` als ES-Modul
 | `src/plans.js` | Wochenrhythmus, Plan-Assistent, nächste Einheit |
 | `src/workout.js` | Sessions anlegen, fortsetzen, abschließen, Progressionsvorschläge |
 | `src/backup.js` | JSON-Export, Validierung und Import, CSV |
+| `src/sync.js` | Anmeldung, Registrierung und automatisches Hoch- und Herunterladen der Daten beim Sync-Server |
+| `src/aiAccess.js`, `src/ai.js` | Woher der Assistent Claude bekommt (Server oder eigener Schlüssel) und der Claude-Client |
+| `src/push.js` | Erinnerung zum Pausenende als Web-Push über den Sync-Server |
 | `src/importers.js` | Hevy- und Strong-CSV: Parser, Übungszuordnung, Zusammenführen in den Verlauf |
 | `src/charts.js` | Canvas-Diagramme |
 | `src/ui.js` | Toast mit Rückgängig, Bottom-Sheets für Bestätigungen und Inhalte (ersetzt `alert`/`confirm`) |
 | `src/units.js`, `src/plates.js` | Einheitenumrechnung und Scheibenrechner |
 | `src/render.js` | Rendert die aktive View und bindet ihre Events |
 | `src/views/*.js` | Eine Datei pro Bildschirm, jeweils `view()` und `bind()` |
+| `sync-server/` | Der Sync-Server: Konten, Sicherungen, Claude-Weiterleitung, Push, siehe [`sync-server/README.md`](sync-server/README.md) |
 
 Übungen werden über ihre Bibliotheks-ID (`libraryId`) verknüpft. Verlauf und Kraftkurven bleiben deshalb auch nach Umbenennungen oder Planwechseln zusammen. Trainings und Messungen tragen zusätzlich einen lokalen Tagesschlüssel (`day`, `YYYY-MM-DD`), damit Kalender und Wochenansicht in jeder Zeitzone stabil sind. Das Datenschema ist versioniert; Migrationen in `src/storage.js` laufen genau einmal.
 
@@ -62,6 +66,13 @@ npm start
 
 Dann `http://localhost:8080` öffnen. Alternativ funktioniert jeder statische Server, z. B. `python3 -m http.server 8080`.
 
+Ohne Anmeldung zeigt die App nur den Anmeldebildschirm. Für die Entwicklung einen eigenen Sync-Server starten, einen Einladungscode erzeugen und in der App unter „Anderen Server verwenden“ `http://localhost:8787` eintragen:
+
+```bash
+DATA_DIR=/tmp/volumora-sync ALLOWED_ORIGINS=http://localhost:8080 node sync-server/server.js
+DATA_DIR=/tmp/volumora-sync node sync-server/admin.js invite
+```
+
 ## Tests und Formatierung
 Unit-Tests decken die reinen Module ab (`tests/unit.test.mjs`). Die Smoke-Tests starten die echte App in Chromium und prüfen die wichtigsten Abläufe: Training, Plan-Editor, Assistent, Fotos, Backup-Import, Datenmigration, Rückgängig-Funktion, Offline-Start und einen axe-core-Check auf Barrierefreiheit. GitHub Actions führt beides bei jedem Push aus.
 
@@ -72,8 +83,19 @@ npm test
 npm run format
 ```
 
-## Daten
-Alle Trainings- und Körperdaten bleiben im Browser des Geräts. Es gibt keinen Account und kein Backend. Einzige Ausnahme ist der optionale KI-Assistent (`src/ai.js`, `src/aiPrompts.js`, `src/aiTools.js`, `src/views/ai.js`): Wer einen eigenen Claude-API-Schlüssel einträgt, schickt beim Senden direkt aus dem Browser die eigenen Nachrichten und eine Trainingszusammenfassung an Anthropic. Über Werkzeuge kann der Assistent weitere Trainingsdaten nachschlagen, im Web suchen sowie Pläne, Einstellungen, das laufende Training und Einträge ändern; jede Änderung lässt sich im Chat rückgängig machen, das Löschen eines Plans muss bestätigt werden. Sätze lassen sich einsprechen (`src/speech.js`, `src/views/dictate.js`): Die Spracherkennung übernimmt das Gerät, das Auswerten läuft lokal. Schlüssel und Chat liegen nur im `localStorage` und kommen nicht ins Backup. Für einen Gerätewechsel steht der JSON-Export zur Verfügung; er enthält auch die Fotos aus IndexedDB. Beim Import werden alle Werte geprüft und auf das erwartete Format gebracht.
+## Konto, Server und Daten
+Ein Konto ist Pflicht: Benutzername, Passwort und ein Einladungscode von der Person, die den Server betreibt. Vorgegeben ist der Server des Betreibers von Volumora (`DEFAULT_SYNC_URL` in `src/sync.js`); unter „Anderen Server verwenden“ lässt sich eine andere Adresse eintragen.
+
+Die Daten liegen im Browser des Geräts und, als Sicherung, unter dem Konto auf dem Server: Pläne, Trainings, Körperdaten samt Fortschrittsfotos, Einstellungen, Favoriten, eigene Übungen, der Chat mit dem Assistenten und sein Gedächtnis. Die App lädt Änderungen von selbst hoch; der Server hebt auch ältere Stände auf. Wer den Server betreibt, kann all das lesen. Passwörter speichert der Server nur als Hash (scrypt).
+
+Der KI-Assistent (`src/ai.js`, `src/aiAccess.js`, `src/aiPrompts.js`, `src/aiTools.js`, `src/views/ai.js`) ist Claude von Anthropic. Beim Senden gehen Nachricht, bisheriger Chat, Gedächtnis und eine Trainingszusammenfassung an den Server und von dort an Anthropic, bezahlt mit dem Claude-Schlüssel des Server-Betreibers, für jedes Konto bis zu einem Monatsbudget. Bietet der Server keinen Assistenten an, kann man einen eigenen Claude-API-Schlüssel eintragen; dann geht die Anfrage direkt aus dem Browser an Anthropic, und der Schlüssel bleibt im `localStorage` dieses Geräts, weder im Backup noch auf dem Server. Über Werkzeuge kann der Assistent weitere Trainingsdaten nachschlagen, im Web suchen sowie Pläne, Einstellungen, das laufende Training und Einträge ändern; jede Änderung lässt sich im Chat rückgängig machen, das Löschen eines Plans muss bestätigt werden.
+
+Die Erinnerung zum Pausenende kommt als Push-Nachricht vom Server, der dafür die Push-Anmeldung des Browsers aufbewahrt. Übungsanimationen lädt die App von raw.githubusercontent.com und static.exercisedb.dev. Sätze lassen sich einsprechen (`src/speech.js`, `src/views/dictate.js`): Die Spracherkennung übernimmt das Gerät, das Auswerten läuft lokal.
+
+„Alle Daten löschen“ in den Einstellungen entfernt alles von diesem Gerät und meldet ab; die Sicherung im Konto bleibt. Ein Konto löschen kann die App nicht, das macht die Person, die den Server betreibt (`admin.js delete-user`). Zusätzlich gibt es den JSON-Export als Datei; er enthält auch die Fotos aus IndexedDB, aber weder Chat noch Schlüssel. Beim Import werden alle Werte geprüft und auf das erwartete Format gebracht.
+
+## Betrieb
+Die App ist statisch: GitHub Pages veröffentlicht den Stand von `main`, ohne Build-Schritt. Der Sync-Server läuft getrennt davon als Docker-Container beim Betreiber und nimmt nur Anfragen von den Adressen in `ALLOWED_ORIGINS` an; Einrichtung und Verwaltung stehen in [`sync-server/README.md`](sync-server/README.md).
 
 ## Lizenz
 Der Quellcode steht unter der [MIT-Lizenz](LICENSE). Übungsanimationen und andere Medien von Dritten sind davon ausgenommen und gehören ihren jeweiligen Rechteinhabern, siehe [`THIRD_PARTY_ASSETS.md`](THIRD_PARTY_ASSETS.md).

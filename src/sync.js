@@ -1,6 +1,6 @@
-// Optional automatic copy of everything on a server of someone the person trusts (sync-server/). Off unless they sign
-// in to one. The Claude key never leaves this device. Each upload names the version it builds on, so a device with old
-// data can not silently replace newer data, and the server keeps older versions.
+// The account every installation signs in to (sync-server/), and the automatic copy of everything on it, the
+// assistant's chat and memory included. An own Claude key never leaves this device. Each upload names the version it
+// builds on, so a device with old data can not silently replace newer data, and the server keeps older versions.
 import { backupData, importBackup, validateBackup } from './backup.js';
 import { setLanguage } from './i18n.js';
 import {
