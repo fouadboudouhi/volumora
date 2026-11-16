@@ -169,6 +169,18 @@ test('sw.js precaches every module under src/', async () => {
     assert.ok(existsSync(join(root, file)), `${file} is precached but does not exist`);
 });
 
+// GitHub Pages refuses to publish a site that holds a link pointing outside of it, and says so nowhere near the tests.
+test('the repository tracks no symbolic links', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('..', import.meta.url));
+  const links = execFileSync('git', ['ls-files', '-s'], { cwd, encoding: 'utf8' })
+    .split('\n')
+    .filter((line) => line.startsWith('120000'))
+    .map((line) => line.split('\t')[1]);
+  assert.deepEqual(links, []);
+});
+
 test('backup validation keeps personal-record flags on sets', () => {
   const backup = validateBackup({
     plans: {
