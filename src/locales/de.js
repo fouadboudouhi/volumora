@@ -57,7 +57,7 @@ const ui = {
   'home.resume': 'Fortsetzen',
   'home.valuesTyped': 'Werte eingetragen',
   'home.backupTitle': 'Zeit für eine Sicherung',
-  'home.backupText': 'Deine Daten liegen nur auf diesem Gerät.',
+  'home.backupText': 'Eine Kopie als Datei hilft, falls der Server einmal ausfällt.',
   'home.backupLater': 'Später',
   'home.start': 'Training starten',
   'home.chooseExercises': 'Übungen auswählen',
@@ -453,7 +453,7 @@ const ui = {
   'onboarding.skip': 'Überspringen',
   'onboarding.welcomeTitle': 'Willkommen bei Volumora',
   'onboarding.welcomeText':
-    'Deine Trainings-App ohne Konto: Alles bleibt auf diesem Gerät. Ein paar Fragen, dann steht dein erster Plan.',
+    'Ein paar Fragen, dann steht dein erster Plan. Was du einträgst, sichert die App auch in deinem Konto.',
   'onboarding.haveBackup': 'Ich habe schon ein Backup',
   'onboarding.unitTitle': 'Wie zählst du Gewichte?',
   'onboarding.unitText': 'Du kannst das jederzeit in den Einstellungen ändern.',
@@ -475,7 +475,7 @@ const ui = {
   'gate.text':
     'Dein Konto hält Pläne, Trainings und Körperdaten auf dem Volumora-Server, damit bei einem neuen Handy oder einer Neuinstallation nichts verloren geht. Zum Registrieren brauchst du einen Einladungscode.',
   'gate.foot':
-    'Volumora ist ein privates Projekt. Wer den Server betreibt, kann die gespeicherten Daten einsehen. Dein Claude-Schlüssel bleibt immer auf dem Gerät.',
+    'Volumora ist ein privates Projekt. Wer den Server betreibt, kann deine Daten einsehen, auch Fotos und den Chat mit dem Assistenten.',
   'sync.serverIs': 'Server: {host}.',
   'sync.otherServer': 'Anderen Server verwenden',
   'sync.expiredTitle': 'Bitte neu anmelden',
@@ -511,7 +511,7 @@ const ui = {
   'sync.off': 'Abmelden',
   'sync.offTitle': 'Vom Server abmelden?',
   'sync.offText':
-    'Die App sichert dann nicht mehr von selbst. Deine Daten auf dem Server und auf diesem Gerät bleiben.',
+    'Deine Daten auf dem Server und auf diesem Gerät bleiben. Um die App weiter zu nutzen, musst du dich wieder anmelden.',
   'sync.error.url': 'Bitte trag eine Adresse ein, die mit https beginnt.',
   'sync.error.network': 'Der Server ist gerade nicht erreichbar. Die App versucht es später noch einmal.',
   'sync.error.user': 'Benutzername oder Passwort stimmt nicht.',
@@ -1278,7 +1278,8 @@ export default {
   'ai.error.truncated': 'Die Antwort war zu lang. Versuch es mit einem kleineren Wunsch.',
   'ai.error.aborted': 'Abgebrochen.',
   'settings.aiAdd': 'Claude-Schlüssel eintragen',
-  'settings.aiHint': 'Optional. Ohne Schlüssel bleibt alles auf diesem Gerät.',
+  'settings.aiHint':
+    'Optional. Dein Server bietet gerade keinen Assistenten an. Mit einem eigenen Schlüssel gehen deine Fragen direkt an Anthropic.',
   // Vorschläge und Ersatz
   'workout.suggestComeback': 'Nach {weeks} Wochen Pause: Einstieg mit {weight}',
   'workout.suggestReduce': 'Zweimal unter dem Zielbereich: besser {weight}',

@@ -54,7 +54,7 @@ const ui = {
   'home.resume': 'Resume',
   'home.valuesTyped': 'Values entered',
   'home.backupTitle': 'Time for a backup',
-  'home.backupText': 'Your data lives only on this device.',
+  'home.backupText': 'A copy as a file helps if the server ever fails.',
   'home.backupLater': 'Later',
   'home.start': 'Start workout',
   'home.chooseExercises': 'Choose exercises',
@@ -450,7 +450,7 @@ const ui = {
   'onboarding.skip': 'Skip',
   'onboarding.welcomeTitle': 'Welcome to Volumora',
   'onboarding.welcomeText':
-    'Your training app without an account: everything stays on this device. A few questions and your first plan is ready.',
+    'A few questions and your first plan is ready. What you enter is also saved to your account.',
   'onboarding.haveBackup': 'I already have a backup',
   'onboarding.unitTitle': 'How do you count weights?',
   'onboarding.unitText': 'You can change this in Settings at any time.',
@@ -488,7 +488,7 @@ const ui = {
   'gate.text':
     'Your account keeps plans, workouts and body data on the Volumora server, so nothing is lost with a new phone or a reinstall. To register you need an invitation code.',
   'gate.foot':
-    'Volumora is a private project. Whoever runs the server can see the stored data. Your Claude key always stays on the device.',
+    'Volumora is a private project. Whoever runs the server can see your data, including photos and the chat with the assistant.',
   'sync.serverIs': 'Server: {host}.',
   'sync.otherServer': 'Use another server',
   'sync.expiredTitle': 'Please sign in again',
@@ -523,7 +523,8 @@ const ui = {
   'sync.nothing': 'Nothing is stored on the server yet.',
   'sync.off': 'Sign out',
   'sync.offTitle': 'Sign out from the server?',
-  'sync.offText': 'The app then no longer saves by itself. Your data on the server and on this device stays.',
+  'sync.offText':
+    'Your data on the server and on this device stays. To keep using the app you have to sign in again.',
   'sync.error.url': 'Please enter an address that starts with https.',
   'sync.error.network': 'The server cannot be reached right now. The app will try again later.',
   'sync.error.user': 'Username or password is wrong.',
@@ -1259,7 +1260,8 @@ export default {
   'ai.error.truncated': 'The answer got too long. Try a smaller request.',
   'ai.error.aborted': 'Cancelled.',
   'settings.aiAdd': 'Add Claude key',
-  'settings.aiHint': 'Optional. Without a key everything stays on this device.',
+  'settings.aiHint':
+    'Optional. Your server does not offer an assistant right now. With a key of your own your questions go directly to Anthropic.',
   // Suggestions and replacements
   'workout.suggestComeback': 'After {weeks} weeks off: restart with {weight}',
   'workout.suggestReduce': 'Twice below the target range: better {weight}',

@@ -412,6 +412,27 @@ test('both dictionaries have the same keys and no empty texts', () => {
   for (const k of ek) assert.ok(typeof en[k] === 'string' && en[k].length, `${k} is empty in en`);
 });
 
+// An account is required and everything is copied to the server, so no text may still promise the opposite.
+test('first-run, sign-in and assistant hints do not promise an app without account', () => {
+  const stale =
+    /ohne Konto|bleibt alles auf diesem Gerät|nur auf diesem Gerät|without an account|everything stays on this device|lives only on this device/i;
+  for (const [name, dict] of [
+    ['de', de],
+    ['en', en],
+  ]) {
+    for (const key of [
+      'onboarding.welcomeText',
+      'home.backupText',
+      'gate.foot',
+      'settings.aiHint',
+      'sync.offText',
+    ])
+      assert.doesNotMatch(dict[key], stale, `${key} in ${name}`);
+    // After signing out the app shows only the sign-in screen.
+    assert.match(dict['sync.offText'], /wieder anmelden|sign in again/, `sync.offText in ${name}`);
+  }
+});
+
 test('exercise names resolve per language for library, built-in and custom exercises', () => {
   setLanguage('de');
   assert.equal(exerciseName({ id: 'x', libraryId: '0025', name: 'alt' }), 'Bankdrücken mit Langhantel');
