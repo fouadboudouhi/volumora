@@ -376,12 +376,13 @@ async function mergeSnapshot(config, { version, data }) {
       setLanguage(getSettings().language);
       applyTheme();
     }
-    const now = await digest(contentOf(await snapshot()));
-    moved = changes !== applied;
+    // Without anything of its own to add, this device now holds what the server holds and has nothing to upload,
+    // unless the person stored something while that was being measured.
+    const now = pending ? '' : await digest(contentOf(await snapshot()));
     const takenMarks = await taken;
+    moved = changes !== applied;
     settle(config, {
       version,
-      // Without anything of its own to add, this device now holds what the server holds and has nothing to upload.
       ...(pending || moved ? { hash: '' } : { hash: now, at: new Date().toISOString() }),
       // A piece that stayed keeps its old mark, so it still counts as changed until it has been uploaded.
       marks: Object.fromEntries(
