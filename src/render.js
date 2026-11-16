@@ -103,18 +103,32 @@ export function navigate(view, patch = {}, { replace = false } = {}) {
   render();
 }
 
+// history.back() lands a moment later: until it has, a second tap (a double tap on the arrow) must not step back again.
+let backPending = false;
+let backTimer = 0;
+function stepBack() {
+  if (backPending) return;
+  backPending = true;
+  clearTimeout(backTimer);
+  // In case the step never arrives (no entry below), the arrow does not stay dead.
+  backTimer = setTimeout(() => (backPending = false), 1000);
+  history.back();
+}
+
 // A back arrow: when the entry below in the history is the screen it leads to, step back to it, so the system back
 // afterwards goes on from there instead of returning to the screen just left.
 export function goBack(view) {
-  if (previousView() === view) history.back();
+  if (backPending) return;
+  if (previousView() === view) stepBack();
   else navigate(view);
 }
 
 // A tab of the bottom bar. The first step away from Heute is an entry, so the system back returns there; switching
 // between the other tabs replaces it instead of piling up one entry per tap.
 export function switchTab(view) {
+  if (backPending) return;
   if (state.view === 'home') navigate(view);
-  else if (view === 'home' && previousView() === 'home') history.back();
+  else if (view === 'home' && previousView() === 'home') stepBack();
   else navigate(view, {}, { replace: true });
 }
 
@@ -125,6 +139,8 @@ export function applyRoute(view, patch = {}) {
     history.back();
     return;
   }
+  backPending = false;
+  clearTimeout(backTimer);
   Object.assign(state, patch);
   state.view = view;
   render();

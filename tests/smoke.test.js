@@ -685,6 +685,33 @@ test('the back arrow steps back through the history and tabs do not pile up entr
   assert.equal(await page.locator('#settingsForm').count(), 0, 'system back does not return to the settings');
 });
 
+test('a double tap on a back arrow steps back once', async () => {
+  await page.click('[data-nav="more"]');
+  await page.click('[data-nav="settings"]');
+  await page.waitForSelector('#settingsForm');
+  await page.dblclick('.backrow .back');
+  await page.waitForSelector('#installRow');
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#installRow').count(), 1, 'still on Mehr, not on Heute');
+  assert.equal(await page.locator('.next-card').count(), 0);
+});
+
+test('the strength chart says so when the exercise was not trained in the range', async () => {
+  await seedHistory();
+  await page.evaluate(async () => {
+    const { getHistory, saveHistory } = await import('/src/storage.js');
+    saveHistory(getHistory().filter((h) => h.id === 's-old'));
+  });
+  await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="strength"]');
+  await page.click('[data-trend-exercise]');
+  await page.waitForSelector('#strengthEmpty:not([hidden])');
+  assert.equal(await page.locator('#strengthChart').isVisible(), false, 'no bare canvas');
+  await page.click('[data-range="all"]');
+  await page.waitForSelector('#strengthChart:not([hidden])');
+  assert.equal(await page.locator('#strengthEmpty').isVisible(), false);
+});
+
 test('charts follow the viewport width', async () => {
   await seedHistory();
   await page.click('[data-nav="analytics"]');

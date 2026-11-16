@@ -282,6 +282,9 @@ function bodyStrengthSeries(key, range) {
 export function drawAnalytics(selectedKey, range) {
   lineChart(document.querySelector('#volumeChart'), volumeSeries(range), { suffix: ` ${unit()}` });
   const { points: strength, suffix } = strengthChartSeries(selectedKey, range);
+  // An exercise not trained in the range: say so instead of leaving a bare canvas under its value.
+  document.querySelector('#strengthChart')?.toggleAttribute('hidden', !strength.length);
+  document.querySelector('#strengthEmpty')?.toggleAttribute('hidden', !!strength.length);
   lineChart(document.querySelector('#strengthChart'), strength, {
     color: token('--orange'),
     suffix,

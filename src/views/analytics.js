@@ -93,7 +93,7 @@ function exerciseRows(history, exercises, selected) {
       value: values.length ? `${fmtNumber(values.at(-1))}${suffix}` : '–',
       values,
       open: key === selected && !state.analyticsCollapsed,
-      detail: `<canvas id="strengthChart" height="200" role="img" aria-label="${t('history.strengthAria')}"></canvas>`,
+      detail: `<canvas id="strengthChart" height="200" role="img" aria-label="${t('history.strengthAria')}"></canvas><p class="muted analytics-hint" id="strengthEmpty" hidden>${t('analytics.strengthEmptyRange')}</p>`,
     });
   });
   const more =

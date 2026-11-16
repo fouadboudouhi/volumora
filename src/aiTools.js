@@ -876,8 +876,14 @@ export async function runTool(name, input, { confirm }) {
     return result?.error ? result : { result };
   }
   if (CHANGES[name]) {
-    const failures = writeFailures();
-    const outcome = await CHANGES[name](values, confirm);
+    // Only the tool's own writes count: other code may write (and fail) while the person is still deciding.
+    let failures = writeFailures();
+    const asked = async (question) => {
+      const answer = await confirm(question);
+      failures = writeFailures();
+      return answer;
+    };
+    const outcome = await CHANGES[name](values, asked);
     // A change the device refused to store must not reach Claude as done, or it tells the person it was saved.
     if (writeFailures() > failures)
       return {

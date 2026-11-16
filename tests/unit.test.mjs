@@ -1771,6 +1771,51 @@ test('an assistant change the device could not store reaches Claude as an error,
   delete globalThis.requestAnimationFrame;
 });
 
+test('a write of other code that fails while the person decides does not turn a stored change into a failure', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (k === 'volumora-active-v2') throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { runTool } = await import('../src/aiTools.js');
+  const { allPlans: getPlans, savePlans, write } = await import('../src/storage.js');
+  const plans = getPlans();
+  const extra = { ...structuredClone(plans.items[0]), id: 'extra', name: 'Extra' };
+  savePlans({ ...plans, items: [...plans.items, extra] });
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const outcome = await runTool(
+    'delete_plan',
+    { plan_id: 'extra' },
+    {
+      // A sync download or the running workout writes while the dialog is open, and the storage refuses it.
+      confirm: async () => {
+        write('volumora-active-v2', { id: 'other' });
+        return true;
+      },
+    }
+  );
+  globalThis.setTimeout = timer;
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.result.deleted, true);
+  assert.equal(
+    getPlans().items.some((p) => p.id === 'extra'),
+    false
+  );
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
+});
+
 test('body entries are stored newest first by their date, however they got in', async () => {
   const store = new Map();
   Object.defineProperty(globalThis, 'localStorage', {
