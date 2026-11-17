@@ -164,13 +164,26 @@ export async function adminCall(path, options = {}) {
     typeof detail.error === 'string' ? detail.error.replace(' ', '') : ERRORS[response.status] || 'server'
   );
 }
-// The token a sign-out revoked: an upload that was still running must not bring it back.
+// The token of the sign-in that ended on this device last: by a sign-out, or with its data being removed for
+// another account.
 let revoked = '';
-// Stores the outcome of an exchange with the server. A sign-in that is not stored yet is stored with it, unless it
-// was signed out in the meantime.
+// Whether `config` is still the sign-in this device works under: the one stored here, or one that is about to be
+// stored with its first exchange. An exchange can outlast its sign-in, for instance while it waits for a slow
+// server and the person signs out. The data on the device may be gone or someone else's by then, so from that
+// moment on it must not write anything, neither here nor on the server.
+const inForce = (config) => {
+  const token = syncConfig()?.token;
+  return token ? token === config.token : config.token !== revoked;
+};
+const stopUnlessInForce = (config) => {
+  if (!inForce(config)) throw new SyncError('session');
+};
+// Stores the outcome of an exchange with the server in the sign-in it ran under. A sign-in that is not stored yet
+// is stored with it.
 const settle = (config, changes) => {
-  if (syncConfig()) update(changes);
-  else if (config.token !== revoked) saveConfig({ ...config, ...changes });
+  if (!inForce(config)) return;
+  if (syncConfig()?.token) update(changes);
+  else saveConfig({ ...config, ...changes });
 };
 const atMost = (ms, job) => {
   let clock;
@@ -190,7 +203,8 @@ export async function signOut() {
       syncNow().catch(() => {})
     );
   const config = syncConfig();
-  revoked = config?.token || '';
+  // From here on, whatever is still running under this sign-in stops before it writes (see inForce).
+  revoked = config?.token || revoked;
   if (config?.username) {
     const { url, username, version, hash, marks, at } = config;
     try {
@@ -272,6 +286,8 @@ export async function uploadNow(config = syncConfig(), { force = false } = {}) {
       if (!config.marks && syncConfig()?.token === config.token) update({ marks: await marksOf(data) });
       return false;
     }
+    // What was just read is this account's data only as long as its sign-in holds.
+    stopUnlessInForce(config);
     const response = await call(config, '/v1/snapshot', {
       method: 'PUT',
       headers: config.version ? { 'if-match': `"${config.version}"` } : {},
@@ -300,6 +316,7 @@ export const restoreSnapshot = (config, found) => inTurn(() => replaceDevice(con
 async function replaceDevice(config, { version, data }) {
   const backup = validateBackup(data?.backup);
   if (uploading) await uploading.catch(() => {});
+  stopUnlessInForce(config);
   restoring = true;
   clearTimeout(timer);
   timer = null;
@@ -315,7 +332,10 @@ async function replaceDevice(config, { version, data }) {
     const now = await snapshot();
     const hash = await digest(contentOf(now));
     const at = new Date().toISOString();
-    saveConfig({ ...config, version, hash, marks: await marksOf(now), at, problem: '', latest: '' });
+    const marks = await marksOf(now);
+    // A sign-out in the meantime stays one: the data is here, the sign-in does not come back.
+    stopUnlessInForce(config);
+    saveConfig({ ...config, version, hash, marks, at, problem: '', latest: '' });
   } finally {
     restoring = false;
   }
@@ -339,6 +359,7 @@ async function mergeSnapshot(config, { version, data }) {
     // state goes up as the next version.
   }
   if (uploading) await uploading.catch(() => {});
+  stopUnlessInForce(config);
   restoring = true;
   clearTimeout(timer);
   timer = null;
@@ -362,7 +383,8 @@ async function mergeSnapshot(config, { version, data }) {
     // Before the first-run flow is through no plan is stored, and the default one is made up anew each time it is
     // read. That is no change made here, and it must never go over the plans the account holds.
     if (!localStorage.getItem(LS.plans)) keep.plans = false;
-    // Stored in one go, right after the decision: nothing the person does can come in between.
+    // Stored in one go, right after the decision: nothing the person does can come in between, a sign-out included.
+    stopUnlessInForce(config);
     applying = true;
     let photosStored;
     try {
@@ -452,6 +474,7 @@ export async function deviceData(account) {
 async function clearDevice() {
   clearTimeout(timer);
   timer = null;
+  revoked = syncConfig()?.token || revoked;
   clearOwnStorage();
   await photos.clear().catch(() => {});
 }
@@ -484,9 +507,13 @@ export async function joinAccount(config, { replace = false, adopt = false } = {
   // Read before anything is removed: a sign-in that cannot get at the account's data changes nothing here.
   const found = await fetchSnapshot(config);
   if (found) validateBackup(found.data?.backup);
-  if (foreign) await clearDevice();
-  if (found) await restoreSnapshot(config, found);
-  else await inTurn(() => uploadNow(config, { force: true }));
+  // The removal waits its turn like every exchange, and what follows it runs in the same turn: whatever was still
+  // running for the account before has ended by then, and nothing can get in between.
+  await inTurn(async () => {
+    if (foreign) await clearDevice();
+    if (found) await replaceDevice(config, found);
+    else await uploadNow(config, { force: true });
+  });
   return found ? 'restored' : 'uploaded';
 }
 
@@ -503,15 +530,17 @@ const quietly = async () => {
   lookDue = false;
   if (look) looked = Date.now();
   let merged = false;
+  // How it went is noted in the sign-in it went under, not in one that took its place while it ran.
+  const mine = () => syncConfig()?.token === config.token;
   try {
     const done = await syncNow({ look });
     merged = done.merged;
     // A question that got no answer is asked again with the next exchange.
     lookDue ||= look && !done.asked;
-    if (syncConfig()?.problem) update({ problem: '', latest: '' });
+    if (mine() && syncConfig()?.problem) update({ problem: '', latest: '' });
   } catch (err) {
     lookDue ||= look;
-    update({ problem: err.code || 'server', latest: err.latest || '' });
+    if (mine()) update({ problem: err.code || 'server', latest: err.latest || '' });
   }
   if (merged) news();
 };

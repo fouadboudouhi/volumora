@@ -2687,6 +2687,134 @@ test('the data on a device belongs to one account: the next person gets none of 
   }
 });
 
+test('an exchange that is still running when its account signs out writes nothing afterwards', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const phone = new Map();
+  const tablet = new Map();
+  const laptop = new Map();
+  const ids = () => st.getHistory().map((h) => h.id);
+  const historyOf = async (username) => (await storedFor(s, username)).data.backup.history.map((h) => h.id);
+  // A slow connection: the server's answer to one kind of request of the sign-in in use reaches the app only when
+  // the function `hold` returns is called. `answers` is every answer the server gave, `offline` a request that
+  // does not get through at all.
+  const direct = globalThis.fetch;
+  const answers = [];
+  let slow = null;
+  let offline = '';
+  globalThis.fetch = async (address, options = {}) => {
+    const request = `${options.method || 'GET'} ${new URL(address).pathname}`;
+    if (request === offline) throw new TypeError('offline');
+    const held = slow?.request === request && slow.as === options.headers?.authorization ? slow : null;
+    const response = await direct(address, options);
+    answers.push(`${request} ${response.status}`);
+    await held?.arrived;
+    return response;
+  };
+  const hold = (request) => {
+    let arrive;
+    const arrived = new Promise((resolve) => (arrive = resolve));
+    slow = { request, as: `Bearer ${sync.syncConfig().token}`, arrived };
+    return arrive;
+  };
+  // Signing out waits ten seconds for a silent server. Here that wait is over at once.
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = (run, ms, ...rest) => timeout(run, ms === 10000 ? 20 : ms, ...rest);
+  try {
+    // Anna has a phone and a tablet. Both train before they hear of each other.
+    app.use(phone);
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    await app.setUp();
+    st.saveHistory([workoutOn('a1', '2026-11-01')]);
+    st.saveAiMemory(['Annas Knie']);
+    await sync.syncNow();
+    app.use(tablet);
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'restored');
+    st.saveHistory([workoutOn('tablet', '2026-11-02'), ...st.getHistory()]);
+    await sync.syncNow();
+    app.use(phone);
+    st.saveHistory([workoutOn('a2', '2026-11-03'), ...st.getHistory()]);
+    // She signs out on the phone. Its upload is refused, it asks for what the tablet saved, and that answer is
+    // slow in coming. Signing out does not wait for it.
+    let arrive = hold('GET /v1/snapshot');
+    await sync.signOut();
+    assert.equal(sync.isSignedIn(), false);
+    assert.deepEqual(ids(), ['a2', 'a1']);
+    // Ben registers on the same phone and agrees to have her data removed from it.
+    const ben = await sync.register(url, 'ben', 'long-enough', await s.db.createInvite());
+    const met = await sync.deviceData(ben);
+    assert.deepEqual(
+      { whose: met.whose, username: met.username, saved: met.saved },
+      { whose: 'other', username: 'anna', saved: false }
+    );
+    answers.length = 0;
+    const joining = sync.joinAccount(ben, { replace: true });
+    // His sign-in has asked the server what his account holds (nothing). Only now the answer for Anna arrives.
+    await app.until(
+      () => answers.includes('GET /v1/snapshot 404'),
+      'the sign-in never asked for the account'
+    );
+    await new Promise((resolve) => timeout(resolve, 50));
+    arrive();
+    assert.equal(await joining, 'uploaded');
+    assert.deepEqual([ids(), st.getAiMemory()], [[], []], 'nothing of hers is on the phone he uses now');
+    const his = (await storedFor(s, 'ben')).data;
+    assert.deepEqual([his.backup.history, his.aiMemory], [[], []], 'and nothing of hers is in his account');
+    assert.equal(sync.syncConfig().username, 'ben');
+    assert.deepEqual(await historyOf('anna'), ['tablet', 'a1'], 'her account is as her tablet left it');
+
+    // The same slow answer on her tablet, where she signs out to delete everything on it (what "delete all data"
+    // does): the device stays empty.
+    app.use(laptop);
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    st.saveHistory([workoutOn('laptop', '2026-11-04'), ...st.getHistory()]);
+    await sync.syncNow();
+    app.use(tablet);
+    st.saveHistory([workoutOn('t2', '2026-11-05'), ...st.getHistory()]);
+    arrive = hold('GET /v1/snapshot');
+    await sync.signOut();
+    st.clearOwnStorage();
+    arrive();
+    await sync.syncNow();
+    assert.deepEqual([...tablet.keys()], [], 'what was deleted does not come back from the server');
+    assert.deepEqual(await historyOf('anna'), ['laptop', 'tablet', 'a1']);
+
+    // On the laptop she asks for the server's state to be loaded while the app is still waiting for an answer,
+    // and signs out before it got its turn: it is not loaded any more, and above all she is not signed in again.
+    app.use(laptop);
+    arrive = hold('GET /v1/snapshots');
+    const looking = sync.syncNow({ look: true });
+    const loading = sync.restoreSnapshot(sync.syncConfig(), await sync.fetchSnapshot());
+    await sync.signOut();
+    arrive();
+    await Promise.all([looking, assert.rejects(loading, { code: 'session' })]);
+    assert.equal(sync.isSignedIn(), false, 'a sign-out stays one');
+
+    // She signs in again, and out once more, this time without a connection for the sign-out itself: the server
+    // goes on accepting her sign-in. The device is emptied, and the exchange that was still waiting must not
+    // save the emptied device over what her account holds.
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'merged');
+    const { versions } = await storedFor(s, 'anna');
+    arrive = hold('GET /v1/snapshots');
+    const asking = sync.syncNow({ look: true });
+    offline = 'POST /v1/logout';
+    await sync.signOut();
+    st.clearOwnStorage();
+    arrive();
+    await assert.rejects(asking, { code: 'session' });
+    assert.equal((await storedFor(s, 'anna')).versions, versions, 'nothing went up after the sign-out');
+    assert.deepEqual(await historyOf('anna'), ['laptop', 'tablet', 'a1']);
+  } finally {
+    globalThis.setTimeout = timeout;
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
 test('a merge keeps what both sides have: workouts, body entries and own exercises by id', async () => {
   const app = await appDevices();
   const { st } = app;
