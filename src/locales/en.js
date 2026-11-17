@@ -527,7 +527,7 @@ const ui = {
   'sync.otherSaved': 'All of it is saved in the account “{user}”.',
   'sync.otherSavedRunning':
     'All of it is saved in the account “{user}”, except the workout that is running: it will be lost.',
-  'sync.otherRunning': 'The workout that is running is not saved anywhere either and will be lost.',
+  'sync.otherRunning': 'The workout that is running is not saved anywhere and will be lost.',
   'sync.otherUnsaved':
     'Careful: what was added or changed since {date} exists only on this device. It will be lost.',
   'sync.otherUnknown': 'The app does not know whether all of it has been saved.',
