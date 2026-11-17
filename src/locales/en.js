@@ -560,6 +560,8 @@ const ui = {
   'sync.error.newer':
     'The server holds newer data from another device. The app merges both the next time it saves.',
   'sync.error.other': 'There is data of another account on this device.',
+  'sync.error.storage':
+    'The storage of this device is full. What another device saved does not fit here any more and is missing on this device. What is on this device is saved in the account. Once there is room here again, the app catches up.',
   'sync.error.server': 'The server reported an error.',
   'admin.title': 'Administration',
   'admin.hint': 'Claude key, budgets and invitations',

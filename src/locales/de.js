@@ -549,6 +549,8 @@ const ui = {
   'sync.error.newer':
     'Auf dem Server liegen neuere Daten von einem anderen Gerät. Die App führt beide Stände beim nächsten Sichern zusammen.',
   'sync.error.other': 'Auf diesem Gerät liegen Daten eines anderen Kontos.',
+  'sync.error.storage':
+    'Der Speicher dieses Geräts ist voll. Was ein anderes Gerät gesichert hat, passt hier nicht mehr hinein und fehlt auf diesem Gerät. Was auf diesem Gerät liegt, ist im Konto gesichert. Sobald hier wieder Platz ist, holt die App den Rest nach.',
   'sync.error.server': 'Der Server hat einen Fehler gemeldet.',
   'admin.title': 'Verwaltung',
   'admin.hint': 'Claude-Schlüssel, Budgets und Einladungen',

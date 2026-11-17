@@ -2773,7 +2773,16 @@ async function appDevices() {
       configurable: true,
       value: {
         getItem: (k) => store.get(k) ?? null,
-        setItem: (k, v) => store.set(k, String(v)),
+        // A store with a `quota` refuses what would take it beyond, like a full browser storage.
+        setItem: (k, v) => {
+          const others = [...store].reduce(
+            (n, [key, value]) => n + (key === k ? 0 : key.length + value.length),
+            0
+          );
+          if (others + k.length + String(v).length > store.quota)
+            throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+          store.set(k, String(v));
+        },
         removeItem: (k) => store.delete(k),
         key: (i) => [...store.keys()][i] ?? null,
         get length() {
@@ -3428,6 +3437,107 @@ test('an exchange that is still running when its account signs out writes nothin
   }
 });
 
+test('a device too full for a merge keeps none of it, still gets its own data into the account and says why', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const phone = new Map();
+  const tablet = new Map();
+  const ids = () => st.getHistory().map((h) => h.id);
+  const account = async () => (await storedFor(s, 'anna')).data;
+  // Everything the tablet holds but its sign-in.
+  const held = () => JSON.stringify([...tablet].filter(([key]) => key !== 'volumora-sync').sort());
+  // A refused write shows a toast for nine seconds and logs the error; these stand in for the page.
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  Object.assign(document, { createElement: el, body: el() });
+  globalThis.requestAnimationFrame = () => 0;
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = (run, ms, ...rest) => (ms === 9000 ? 0 : timeout(run, ms, ...rest));
+  const logged = console.error;
+  console.error = () => {};
+  try {
+    app.use(phone);
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    await app.setUp();
+    st.saveHistory([workoutOn('w1', '2026-11-01')]);
+    st.saveAiChat([{ role: 'user', text: 'alt' }]);
+    await sync.syncNow();
+    app.use(tablet);
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    // The phone trains a lot, and the assistant is asked and notes something there.
+    app.use(phone);
+    const many = Array.from({ length: 20 }, (_, i) => workoutOn(`p${i}`, '2026-11-02', 'x'.repeat(2000)));
+    st.saveHistory([...many, ...st.getHistory()]);
+    st.saveAiChat([...st.getAiChat(), { role: 'user', text: 'neu vom Handy' }]);
+    st.saveAiMemory(['vom Handy']);
+    await sync.syncNow();
+    // The tablet trains once and sets a weekly goal. Its storage has room for a little more, not for all that.
+    app.use(tablet);
+    st.saveHistory([workoutOn('own', '2026-11-25'), ...st.getHistory()]);
+    st.saveSettings({ ...st.getSettings(), weeklyGoal: 3 });
+    tablet.quota = [...tablet].reduce((size, [key, value]) => size + key.length + value.length, 5000);
+    const before = held();
+    await assert.rejects(sync.syncNow({ look: true }), { code: 'storage' });
+    assert.equal(held(), before, 'nothing of the merge is kept, the chat and the memory neither');
+    let stored = await account();
+    assert.deepEqual(
+      stored.backup.history.map((h) => h.id),
+      ['own', ...many.map((h) => h.id), 'w1'],
+      'the tablet’s own workout is in the account, next to the phone’s'
+    );
+    assert.deepEqual(
+      [stored.backup.settings.weeklyGoal, stored.aiChat.at(-1).text, stored.aiMemory],
+      [3, 'neu vom Handy', ['vom Handy']],
+      'what the tablet changed went up, what it did not change is still the phone’s'
+    );
+    // The app tries again by itself. Nothing new is here, so nothing goes up, and the screen says what is wrong.
+    let { versions } = await storedFor(s, 'anna');
+    sync.startSync();
+    app.handlers.visibilitychange();
+    await app.until(() => sync.syncConfig().problem === 'storage', 'the full storage was never reported');
+    assert.equal((await storedFor(s, 'anna')).versions, versions);
+    assert.match(de['sync.error.storage'], /Speicher dieses Geräts ist voll.*im Konto gesichert/);
+    assert.match(en['sync.error.storage'], /storage of this device is full.*saved in the account/);
+
+    // The phone has the tablet's workout and goal now, and raises the goal.
+    app.use(phone);
+    await sync.syncNow({ look: true });
+    assert.deepEqual([ids()[0], st.getSettings().weeklyGoal], ['own', 3]);
+    st.saveSettings({ ...st.getSettings(), weeklyGoal: 5 });
+    await sync.syncNow();
+    // Another workout on the full tablet goes up as well, and its goal, uploaded before, does not go over the
+    // phone's newer one.
+    app.use(tablet);
+    st.saveHistory([workoutOn('own-2', '2026-11-26'), ...st.getHistory()]);
+    await assert.rejects(sync.syncNow(), { code: 'storage' });
+    stored = await account();
+    assert.deepEqual([stored.backup.history[0].id, stored.backup.settings.weeklyGoal], ['own-2', 5]);
+    assert.deepEqual(ids(), ['own-2', 'own', 'w1'], 'the tablet is as it was, plus what was done on it');
+
+    // With room again the merge is stored, and both devices and the account hold the same.
+    tablet.quota = Infinity;
+    ({ versions } = await storedFor(s, 'anna'));
+    const done = await sync.syncNow({ look: true });
+    assert.deepEqual([done.merged, done.uploaded], [true, false]);
+    assert.deepEqual(ids(), ['own-2', 'own', ...many.map((h) => h.id), 'w1']);
+    assert.deepEqual(
+      [st.getSettings().weeklyGoal, st.getAiChat().at(-1).text, st.getAiMemory()],
+      [5, 'neu vom Handy', ['vom Handy']]
+    );
+    assert.equal((await storedFor(s, 'anna')).versions, versions, 'all of it was in the account already');
+    await sync.signOut();
+  } finally {
+    console.error = logged;
+    globalThis.setTimeout = timeout;
+    delete globalThis.requestAnimationFrame;
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
 test('a merge keeps what both sides have: workouts, body entries and own exercises by id', async () => {
   const app = await appDevices();
   const { st } = app;
@@ -3500,6 +3610,65 @@ test('a merge keeps what both sides have: workouts, body entries and own exercis
       before
     );
   } finally {
+    app.done();
+  }
+});
+
+test('a merge the device cannot store leaves everything as it was, and the same merge can be made without storing', async () => {
+  const app = await appDevices();
+  const { st } = app;
+  const { backupData, mergeBackup, mergedBackup } = await import('../src/backup.js');
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  Object.assign(document, { createElement: el, body: el() });
+  globalThis.requestAnimationFrame = () => 0;
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = (run, ms, ...rest) => (ms === 9000 ? 0 : timeout(run, ms, ...rest));
+  const logged = console.error;
+  console.error = () => {};
+  const device = new Map();
+  try {
+    app.use(device);
+    await app.setUp();
+    // The plans here are larger than the ones coming in, so the merge makes room before it runs out of it: the
+    // body entries only fit because of that, and the workouts do not fit at all.
+    st.savePlans({
+      ...st.allPlans(),
+      items: st.allPlans().items.map((p) => ({ ...p, description: 'x'.repeat(200) })),
+    });
+    st.saveHistory([workoutOn('mine', '2026-11-01')]);
+    st.saveBody([]);
+    const theirs = validateBackup({
+      plans: { activePlanId: 'p', items: [{ id: 'p', name: 'Klein', days: [] }] },
+      history: Array.from({ length: 10 }, (_, i) => workoutOn(`t${i}`, '2026-10-01', 'x'.repeat(500))),
+      body: Array.from({ length: 4 }, (_, i) => ({
+        id: `b${i}`,
+        date: '2026-10-01T07:00:00.000Z',
+        weight: 80,
+      })),
+    });
+    const all = () => JSON.stringify([...device].sort());
+    const before = all();
+    const mine = await backupData();
+    device.quota = [...device].reduce((size, [key, value]) => size + key.length + value.length, 100);
+    assert.throws(() => mergeBackup(theirs, {}), { message: 'storage' });
+    assert.equal(all(), before, 'nothing of the merge is kept');
+    // Worked out without storing, it is what the device holds once it has room for it.
+    const merged = mergedBackup(mine, theirs, {});
+    assert.equal(all(), before);
+    device.quota = Infinity;
+    await mergeBackup(theirs, {});
+    assert.deepEqual(
+      JSON.parse(JSON.stringify({ ...merged, exportedAt: '' })),
+      JSON.parse(JSON.stringify({ ...(await backupData()), exportedAt: '' }))
+    );
+    assert.deepEqual(
+      [merged.plans.items[0].name, merged.history.length, merged.body.length],
+      ['Klein', 11, 4]
+    );
+  } finally {
+    console.error = logged;
+    globalThis.setTimeout = timeout;
+    delete globalThis.requestAnimationFrame;
     app.done();
   }
 });

@@ -338,22 +338,25 @@ export async function importBackup(backup) {
   return failed;
 }
 
+// What `others` holds that `mine` does not. Ids are compared the way the validation writes them: a record here whose
+// id it would rewrite is the same record as its rewritten copy over there. Nothing the other side holds twice is
+// taken twice.
+const missingIn = (mine, others) => {
+  const ids = new Set(mine.map((item) => asId(item.id)));
+  return others.filter((item) => !ids.has(item.id) && ids.add(item.id));
+};
+const newest = (field) => (a, b) => new Date(b[field]) - new Date(a[field]);
+
 // Brings another state of the same account onto this device without taking anything away: `theirs` is a validated
 // backup, usually what the server holds. Workouts, body entries and own exercises are kept from both sides by their
 // id, and where both have one, the copy on this device stays. Plans, settings and exercise preferences are one
 // piece each: `keep` names those this device keeps, the others are taken over. A running workout and the photos
-// already here are not touched. Everything but the new photos is stored before the first pause, so nothing else can
-// be stored in between. Throws when local storage is full; the data then stays as it was.
-export async function mergeBackup(theirs, keep = {}) {
+// already here are not touched. Everything but the new photos is stored before it returns, so nothing else can be
+// stored in between; what it returns is the new photos being stored. Throws when local storage is full; the data
+// then stays as it was.
+export function mergeBackup(theirs, keep = {}) {
   const keys = [LS.plans, LS.history, LS.body, LS.settings, LS.exercisePrefs, LS.customExercises];
   const before = keys.map((key) => localStorage.getItem(key));
-  // Ids are compared the way the validation writes them: a record here whose id it would rewrite is the same record
-  // as its rewritten copy over there. Nothing the other side holds twice is taken twice.
-  const missingIn = (mine, others) => {
-    const ids = new Set(mine.map((item) => asId(item.id)));
-    return others.filter((item) => !ids.has(item.id) && ids.add(item.id));
-  };
-  const newest = (field) => (a, b) => new Date(b[field]) - new Date(a[field]);
   const sessions = missingIn(getHistory(), theirs.history);
   const entries = missingIn(getBody(), theirs.body);
   const customs = missingIn(getCustomExercises(), theirs.customExercises || []);
@@ -370,12 +373,33 @@ export async function mergeBackup(theirs, keep = {}) {
     !customs.length || saveCustomExercises([...getCustomExercises(), ...customs]),
   ].every(Boolean);
   if (!stored) {
-    keys.forEach((key, i) =>
-      before[i] === null ? localStorage.removeItem(key) : localStorage.setItem(key, before[i])
-    );
+    // Taken back last write first: on the way back the storage then never holds more than it did on the way there.
+    for (let i = keys.length - 1; i >= 0; i--) {
+      if (before[i] === null) localStorage.removeItem(keys[i]);
+      else localStorage.setItem(keys[i], before[i]);
+    }
     throw new Error('storage');
   }
   // Plans from an older version keep custom exercises inside; move them into the store like the migration does.
   if (!keep.plans) promoteCustomExercises();
-  await storePhotos(entries);
+  return storePhotos(entries);
+}
+
+// The same merge worked out without storing anything, for a device whose storage cannot hold it: `mine` is this
+// device's backup as it is uploaded, and so is what comes back.
+export function mergedBackup(mine, theirs, keep = {}) {
+  const sessions = missingIn(mine.history, theirs.history);
+  const entries = missingIn(mine.body, theirs.body);
+  const customs = missingIn(mine.customExercises, theirs.customExercises || []);
+  return {
+    ...mine,
+    plans: keep.plans ? mine.plans : theirs.plans,
+    history: sessions.length
+      ? annotateAll([...sessions, ...mine.history].sort(newest('finishedAt')))
+      : mine.history,
+    body: entries.length ? [...entries, ...mine.body].sort(newest('date')) : mine.body,
+    settings: keep.settings ? mine.settings : theirs.settings,
+    exercisePrefs: keep.exercisePrefs ? mine.exercisePrefs : theirs.exercisePrefs,
+    customExercises: customs.length ? [...mine.customExercises, ...customs] : mine.customExercises,
+  };
 }

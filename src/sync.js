@@ -3,7 +3,7 @@
 // builds on, so a device with old data can not silently replace newer data, and the server keeps older versions. What
 // the server holds that this device has not seen is merged in, not chosen against. The data on a device belongs to
 // one account.
-import { backupData, importBackup, mergeBackup, validateBackup } from './backup.js';
+import { backupData, importBackup, mergeBackup, mergedBackup, validateBackup } from './backup.js';
 import { setLanguage } from './i18n.js';
 import {
   LS,
@@ -366,6 +366,9 @@ async function replaceDevice(config, { version, data }) {
 // what the assistant remembers are taken from the server, except those this device changed since its last exchange:
 // they stay and go up with the next upload. A running workout always stays. Like a restore, it starts no upload
 // of its own.
+// A device whose storage cannot hold all that keeps none of it and stays at the version it had. What it has of its
+// own goes into the account all the same: the merge is made without storing it and uploaded on top of the
+// server's version. Then it fails with 'storage', so the person learns that this device is full.
 // The person may be using the app while this runs. `changes` counts what they store, so the merge can tell that the
 // data moved while it was being read, and then decides again or leaves the pieces alone.
 let changes = 0;
@@ -387,14 +390,14 @@ async function mergeSnapshot(config, { version, data }) {
   timer = null;
   let moved = false;
   try {
-    let hash, marks;
+    let mine, hash, marks, measured;
     let steady = false;
     for (let tries = 0; tries < 3 && !steady; tries++) {
-      const start = changes;
-      const mine = await snapshot();
+      measured = changes;
+      mine = await snapshot();
       hash = await digest(contentOf(mine));
       marks = await marksOf(mine);
-      steady = changes === start;
+      steady = changes === measured;
     }
     // Something to add from here: a change since the last exchange, or data that would not hold still.
     const pending = !theirs || !steady || hash !== config.hash;
@@ -409,13 +412,50 @@ async function mergeSnapshot(config, { version, data }) {
     // Stored in one go, right after the decision: nothing the person does can come in between, a sign-out included.
     stopUnlessInForce(config);
     applying = true;
+    const takes = (name) => !keep[name] && Array.isArray(data[name]);
     let photosStored;
+    let full = false;
     try {
-      if (theirs) photosStored = mergeBackup(theirs, keep);
-      if (theirs && !keep.aiChat && Array.isArray(data.aiChat)) saveAiChat(data.aiChat);
-      if (theirs && !keep.aiMemory && Array.isArray(data.aiMemory)) saveAiMemory(data.aiMemory);
+      if (theirs) {
+        // All of it or nothing. The lists come last and take themselves back when they do not fit; the chat and
+        // the memory are put back after them, so the storage never holds more on the way back than on the way there.
+        const before = [LS.aiMemory, LS.aiChat].map((key) => [key, localStorage.getItem(key)]);
+        try {
+          if (takes('aiChat') && !saveAiChat(data.aiChat)) throw new Error('storage');
+          if (takes('aiMemory') && !saveAiMemory(data.aiMemory)) throw new Error('storage');
+          photosStored = mergeBackup(theirs, keep);
+        } catch (err) {
+          before.forEach(([key, value]) =>
+            value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value)
+          );
+          if (err.message !== 'storage') throw err;
+          full = true;
+        }
+      }
     } finally {
       applying = false;
+    }
+    if (full) {
+      if (pending) {
+        const merged = {
+          ...mine,
+          backup: mergedBackup(mine.backup, theirs, keep),
+          aiChat: takes('aiChat') ? data.aiChat : mine.aiChat,
+          aiMemory: takes('aiMemory') ? data.aiMemory : mine.aiMemory,
+        };
+        await call(config, '/v1/snapshot', {
+          method: 'PUT',
+          headers: { 'if-match': `"${version}"` },
+          body: JSON.stringify(merged),
+        });
+        // Everything this device holds is in the account now, so none of it counts as changed any more. The
+        // version stays the one it had: what the server holds beyond that is still missing here.
+        settle(config, { hash, marks, at: new Date().toISOString() });
+      }
+      moved = changes !== measured;
+      // What the server holds is still to be brought in: the next exchange asks for it again.
+      lookDue = true;
+      throw new SyncError('storage');
     }
     const taken = marksOf(piecesNow());
     const applied = changes;
@@ -441,9 +481,9 @@ async function mergeSnapshot(config, { version, data }) {
     });
   } finally {
     restoring = false;
+    // What the person stored meanwhile started no upload of its own while the merge was running.
+    if (moved && syncConfig()) soon();
   }
-  // What the person stored meanwhile started no upload of its own while the merge was running.
-  if (moved && syncConfig()) soon();
 }
 
 // One exchange with the server. With `look` it first asks whether the server holds a version this device has not
