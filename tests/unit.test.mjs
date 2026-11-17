@@ -412,6 +412,96 @@ test('both dictionaries have the same keys and no empty texts', () => {
   for (const k of ek) assert.ok(typeof en[k] === 'string' && en[k].length, `${k} is empty in en`);
 });
 
+// An account is required and everything is copied to the server, so no text may still promise the opposite.
+test('first-run, sign-in and assistant hints do not promise an app without account', () => {
+  const stale =
+    /ohne Konto|bleibt alles auf diesem Gerät|nur auf diesem Gerät|without an account|everything stays on this device|lives only on this device/i;
+  for (const [name, dict] of [
+    ['de', de],
+    ['en', en],
+  ]) {
+    for (const key of [
+      'onboarding.welcomeText',
+      'home.backupText',
+      'gate.foot',
+      'settings.aiHint',
+      'sync.offText',
+    ])
+      assert.doesNotMatch(dict[key], stale, `${key} in ${name}`);
+    // After signing out the app shows only the sign-in screen.
+    assert.match(dict['sync.offText'], /wieder anmelden|sign in again/, `sync.offText in ${name}`);
+    // The hint also shows when only the sign-in expired (aiAccess.js), so it may not claim the server has no assistant.
+    assert.doesNotMatch(
+      dict['settings.aiHint'],
+      /bietet.*keinen Assistenten|does not offer/,
+      `settings.aiHint in ${name}`
+    );
+    assert.match(dict['settings.aiHint'], /neu an|sign in again/, `settings.aiHint in ${name}`);
+  }
+});
+
+// The chat and memory are part of every upload (sync.js), and the assistant usually runs on the server's key.
+test('the privacy text says what goes to the server and to Anthropic, and never the opposite', () => {
+  const stale = [
+    /Was er sich merkt, bleibt auf diesem Gerät|What it remembers stays on this device/,
+    /Der Chat bleibt auf diesem Gerät|The chat stays on this device/,
+    /nur aktiv, wenn du einen eigenen|only active once you enter your own/,
+    /erzeugt dein Gerät lokal|created locally by your device/,
+  ];
+  const facts = {
+    de: [
+      /Einladungscode/,
+      /Chat/,
+      /Gemerkte/,
+      /Monatsbudget/,
+      /Push/,
+      /bleibt.*Konto|Konto.*bleibt/,
+      /Konto löschen/,
+    ],
+    en: [
+      /invitation code/,
+      /chat/,
+      /remembers/,
+      /monthly budget/,
+      /push/,
+      /account stays/,
+      /delete an account/,
+    ],
+  };
+  for (const [name, dict] of [
+    ['de', de],
+    ['en', en],
+  ]) {
+    const text = dict['legal.privacyText'];
+    for (const pattern of stale) assert.doesNotMatch(text, pattern, `${name}: ${pattern}`);
+    for (const pattern of facts[name]) assert.match(text, pattern, `${name}: ${pattern}`);
+    // The chat is uploaded with everything else, so nothing "only" goes to Anthropic.
+    assert.doesNotMatch(
+      dict['ai.setupSent'],
+      /nur an Anthropic|only goes to Anthropic/,
+      `ai.setupSent in ${name}`
+    );
+  }
+});
+
+// The README and the file headers are what a reader trusts first; they still described an app without server.
+test('the README and the sync and Claude modules describe the app with account and server', () => {
+  const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const readme = file('README.md');
+  assert.doesNotMatch(readme, /keinen Account|kein Backend|Lokale Speicherung im Browser/);
+  // ALLOWED_ORIGINS only decides the CORS headers (server.js); requests from elsewhere are still processed.
+  assert.doesNotMatch(readme, /nimmt nur Anfragen/);
+  for (const fact of [/Konto/, /Einladungscode/, /DEFAULT_SYNC_URL/, /Monatsbudget/, /Push/, /GitHub Pages/])
+    assert.match(readme, fact);
+  const head = (path) => file(path).split('\n').slice(0, 4).join('\n');
+  assert.doesNotMatch(head('src/sync.js'), /Optional|Off unless/);
+  assert.doesNotMatch(
+    head('src/ai.js'),
+    /straight from\n?.*this browser to Anthropic, with the person's own key/
+  );
+  assert.doesNotMatch(head('sync-server/README.md'), /^Optional\./m);
+});
+
 test('exercise names resolve per language for library, built-in and custom exercises', () => {
   setLanguage('de');
   assert.equal(exerciseName({ id: 'x', libraryId: '0025', name: 'alt' }), 'Bankdrücken mit Langhantel');
