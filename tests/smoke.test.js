@@ -3118,6 +3118,25 @@ test('signing out promises only what it can keep, and says so when not everythin
   await page.waitForFunction(() =>
     /Nicht alles ist gesichert/.test(document.querySelector('.sheet-backdrop.show .sheet')?.textContent || '')
   );
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+
+  // Someone else wants in while a workout is still running here. Nothing was ever uploaded from this device, and
+  // the running workout is named on top of that.
+  await page.evaluate(async () => {
+    const { saveActive } = await import('/src/storage.js');
+    saveActive({ id: 'running', entries: [{ exerciseId: 'e', sets: [{ reps: '5', done: true }] }] });
+  });
+  await page.click('[data-sync-mode="login"]');
+  await page.fill('#syncUser', 'ben');
+  await page.fill('#syncPassword', 'noch-ein-passwort');
+  await page.click('#syncConnect');
+  await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+  assert.match(
+    await sheetText(),
+    /Ob alles davon gesichert ist, weiß die App nicht\. Das Training, das gerade läuft, ist nirgends gesichert/
+  );
+  await page.click('.sheet-backdrop.show [data-cancel]');
 });
 
 test('the admin stores the Claude key, sets budgets and invites; everyone else just chats', async () => {
