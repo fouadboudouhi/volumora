@@ -3429,6 +3429,29 @@ test('an exchange that is still running when its account signs out writes nothin
     await assert.rejects(asking, { code: 'session' });
     assert.equal((await storedFor(s, 'anna')).versions, versions, 'nothing went up after the sign-out');
     assert.deepEqual(await historyOf('anna'), ['laptop', 'tablet', 'a1']);
+
+    // An answer that is slow enough to outlast two sign-outs: she signs out while her upload is on its way, signs
+    // in again and out once more before its answer arrives. Neither sign-in comes back with it, so whoever holds
+    // the laptop next is asked to sign in.
+    offline = '';
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'restored');
+    st.saveHistory([workoutOn('l2', '2026-11-06'), ...st.getHistory()]);
+    arrive = hold('PUT /v1/snapshot');
+    await sync.signOut();
+    const again = sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    await new Promise((resolve) => timeout(resolve, 50));
+    assert.equal(sync.isSignedIn(), true);
+    await sync.signOut();
+    assert.equal(sync.isSignedIn(), false);
+    arrive();
+    await again;
+    await sync.syncNow();
+    assert.equal(
+      sync.isSignedIn(),
+      false,
+      'a sign-in that was ended stays ended, however many came after it'
+    );
+    assert.deepEqual(ids(), ['l2', 'laptop', 'tablet', 'a1'], 'her data is still on the laptop');
   } finally {
     globalThis.setTimeout = timeout;
     app.done();

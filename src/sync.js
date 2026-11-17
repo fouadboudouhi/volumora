@@ -165,16 +165,16 @@ export async function adminCall(path, options = {}) {
     typeof detail.error === 'string' ? detail.error.replace(' ', '') : ERRORS[response.status] || 'server'
   );
 }
-// The token of the sign-in that ended on this device last: by a sign-out, or with its data being removed for
-// another account.
-let revoked = '';
+// The tokens of the sign-ins that ended on this device since the app started: by a sign-out, or with their data
+// being removed for another account.
+const revoked = new Set();
 // Whether `config` is still the sign-in this device works under: the one stored here, or one that is about to be
 // stored with its first exchange. An exchange can outlast its sign-in, for instance while it waits for a slow
 // server and the person signs out. The data on the device may be gone or someone else's by then, so from that
 // moment on it must not write anything, neither here nor on the server.
 const inForce = (config) => {
   const token = syncConfig()?.token;
-  return token ? token === config.token : config.token !== revoked;
+  return token ? token === config.token : !revoked.has(config.token);
 };
 const stopUnlessInForce = (config) => {
   if (!inForce(config)) throw new SyncError('session');
@@ -205,7 +205,7 @@ export async function signOut() {
     );
   const config = syncConfig();
   // From here on, whatever is still running under this sign-in stops before it writes (see inForce).
-  revoked = config?.token || revoked;
+  if (config?.token) revoked.add(config.token);
   if (config?.username) {
     const { url, username, version, hash, marks, at } = config;
     try {
@@ -537,7 +537,8 @@ export async function deviceData(account) {
 async function clearDevice() {
   clearTimeout(timer);
   timer = null;
-  revoked = syncConfig()?.token || revoked;
+  const token = syncConfig()?.token;
+  if (token) revoked.add(token);
   clearOwnStorage();
   await photos.clear().catch(() => {});
 }
