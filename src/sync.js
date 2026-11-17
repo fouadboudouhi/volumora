@@ -24,6 +24,7 @@ import {
   saveAiMemory,
 } from './storage.js';
 import { applyTheme } from './theme.js';
+import { sessionStarted } from './workout.js';
 
 const KEY = 'volumora-sync';
 // Whose data stays on this device once nobody is signed in: the account that signed out, and how far its data had
@@ -525,13 +526,15 @@ export const syncNow = (options) => inTurn(() => exchange(syncConfig(), options)
 // What a sign-in as `account` ({ url, username }) meets on this device: nothing ('none'), this account's own data
 // ('own'), another account's ('other'), or data whose account was never noted ('unknown': an installation that was
 // signed out before owners were remembered). For another account's data it also says whether all of it had been
-// uploaded there, or since when part of it exists only here.
+// uploaded there, or since when part of it exists only here, and whether a workout is running: that one is never
+// uploaded, so it exists only here whatever else was saved.
 export async function deviceData(account) {
   const owner = dataOwner();
   if (!owner) return { whose: hasPersonalData() ? 'unknown' : 'none' };
   if (sameAccount(owner, account)) return { whose: 'own' };
   const saved = !!owner.hash && owner.hash === (await digest(contentOf(await snapshot())));
-  return { whose: 'other', username: owner.username, url: owner.url, saved, at: owner.at || '' };
+  const running = sessionStarted(getActive());
+  return { whose: 'other', username: owner.username, url: owner.url, saved, at: owner.at || '', running };
 }
 // Takes an account's data off this device: storage, photos, its Claude key and its sign-in.
 async function clearDevice() {

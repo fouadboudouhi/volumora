@@ -3005,6 +3005,17 @@ test('the next person on the same phone starts empty, and nothing of the first l
     await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
     assert.deepEqual(await server.db.users(), ['anna']);
     assert.deepEqual(await workouts(page), ['Annas Beintag']);
+    // Had she left in the middle of a workout, he would be told that this one is saved nowhere.
+    await page.evaluate(async () => {
+      const { saveActive } = await import('/src/storage.js');
+      saveActive({ id: 'running', entries: [{ exerciseId: 'e', sets: [{ reps: '5', done: true }] }] });
+    });
+    await page.click('#syncConnect');
+    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+    const warned = await page.textContent('.sheet-backdrop.show .sheet');
+    assert.match(warned, /alles davon gesichert, nur das Training nicht, das gerade läuft/);
+    await page.click('.sheet-backdrop.show [data-cancel]');
+    await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
     // With his yes her data leaves the phone and he starts like on a new one.
     await page.click('#syncConnect');
     await page.click('.sheet-backdrop.show [data-ok]');

@@ -3246,6 +3246,19 @@ test('the data on a device belongs to one account: the next person gets none of 
       { whose: met.whose, username: met.username, saved: met.saved },
       { whose: 'other', username: 'alice', saved: true }
     );
+    // A workout she had begun is not part of that: a running workout is never uploaded, and he is told that too.
+    // One that was only opened holds nothing to lose.
+    assert.equal(met.running, false);
+    const running = (done) => ({
+      id: 'running',
+      entries: [{ exerciseId: 'e', sets: [{ reps: '5', done }] }],
+    });
+    st.saveActive(running(true));
+    const begun = await sync.deviceData(bob);
+    assert.deepEqual([begun.saved, begun.running], [true, true]);
+    st.saveActive(running(false));
+    assert.equal((await sync.deviceData(bob)).running, false);
+    st.clearActive();
     const invite = await s.db.createInvite();
     const config = await sync.register(url, 'bob', 'long-enough', invite);
     // Without his yes nothing happens: her data is neither uploaded into his account nor touched.

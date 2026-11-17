@@ -49,13 +49,15 @@ async function askAboutDeviceData(account) {
   if (data.whose !== 'other') return {};
   const user = data.url === account.url ? data.username : `${data.username} (${new URL(data.url).host})`;
   const uploaded = data.saved
-    ? t('sync.otherSaved', { user })
+    ? t(data.running ? 'sync.otherSavedRunning' : 'sync.otherSaved', { user })
     : data.at
       ? t('sync.otherUnsaved', { date: new Date(data.at).toLocaleString() })
       : t('sync.otherUnknown');
+  // A running workout is never uploaded: it goes with the rest, whatever else was saved.
+  const running = data.running && !data.saved ? ` ${t('sync.otherRunning')}` : '';
   const ok = await confirmDialog({
     title: t('sync.otherTitle', { user }),
-    text: `${t('sync.otherText', { user, next })} ${uploaded}`,
+    text: `${t('sync.otherText', { user, next })} ${uploaded}${running}`,
     confirmLabel: t('sync.otherConfirm'),
     danger: true,
   });

@@ -514,6 +514,9 @@ const ui = {
   'sync.otherText':
     'Die Trainingsdaten auf diesem Gerät gehören zum Konto „{user}“. Bevor du dich als „{next}“ anmeldest, werden sie von diesem Gerät entfernt.',
   'sync.otherSaved': 'Im Konto „{user}“ ist alles davon gesichert.',
+  'sync.otherSavedRunning':
+    'Im Konto „{user}“ ist alles davon gesichert, nur das Training nicht, das gerade läuft: Es geht dabei verloren.',
+  'sync.otherRunning': 'Auch das Training, das gerade läuft, ist nirgends gesichert und geht dabei verloren.',
   'sync.otherUnsaved':
     'Achtung: Was seit {date} dazugekommen ist oder geändert wurde, gibt es nur auf diesem Gerät. Es geht dabei verloren.',
   'sync.otherUnknown': 'Ob alles davon gesichert ist, weiß die App nicht.',
