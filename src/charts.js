@@ -2,7 +2,7 @@
 import { fmtNumber, t } from './i18n.js';
 import { setScore, trackTypeOf } from './sets.js';
 import { state } from './state.js';
-import { frequency, groupSetsPerWeek, strengthVsBodyweight, weeklyVolume } from './stats.js';
+import { frequency, groupSetsPerWeek, strengthVsBodyweight, weekBuckets, weeklyVolume } from './stats.js';
 import { getBody, getHistory } from './storage.js';
 import { toDisplay, unit } from './units.js';
 import { dayKey, exerciseKey, fmtDate, rangeCutoff, volumeOf } from './util.js';
@@ -228,51 +228,79 @@ export function strengthSeries(history, key) {
               ? ' s'
               : ' km';
       const value = type === 'weight_reps' ? Math.round(toDisplay(best)) : Math.round(best * 100) / 100;
-      return { label: fmtDate(h.day || h.finishedAt), value };
+      return { day: h.day || dayKey(h.finishedAt), label: fmtDate(h.day || h.finishedAt), value };
     })
     .filter(Boolean);
   return { points, suffix };
 }
 
-export function drawAnalytics(selectedKey, range) {
-  const history = historyInRange(range).slice().reverse();
-  lineChart(
-    document.querySelector('#volumeChart'),
-    history.slice(-16).map((h) => ({
-      label: fmtDate(h.day || h.finishedAt),
-      value: Math.round(toDisplay(h.volume || volumeOf(h))),
+const mean = (values) => values.reduce((sum, v) => sum + v, 0) / values.length;
+const bucketLabel = (bucket) =>
+  bucket.week ? t('analytics.weekOf', { date: fmtDate(bucket.day) }) : fmtDate(bucket.day);
+
+// Volume of the sessions in the range, oldest first; a week of many sessions shows the volume of an average one.
+export const volumeSeries = (range) =>
+  weekBuckets(
+    historyInRange(range)
+      .slice()
+      .reverse()
+      .map((h) => ({ day: h.day || dayKey(h.finishedAt), value: toDisplay(h.volume || volumeOf(h)) }))
+  ).map((bucket) => ({
+    label: bucketLabel(bucket),
+    value: Math.round(mean(bucket.items.map((x) => x.value))),
+  }));
+
+// The strength curve of one exercise over the range; a week shows its best session.
+export function strengthChartSeries(key, range) {
+  const { points, suffix } = strengthSeries(historyInRange(range).slice().reverse(), key);
+  return {
+    suffix,
+    points: weekBuckets(points).map((bucket) => ({
+      label: bucketLabel(bucket),
+      value: Math.max(...bucket.items.map((p) => p.value)),
     })),
-    { suffix: ` ${unit()}` }
-  );
-  const everything = getHistory().slice().reverse();
-  const { points: strength, suffix } = strengthSeries(everything, selectedKey);
-  lineChart(document.querySelector('#strengthChart'), strength.slice(-16), {
+  };
+}
+
+// Body weight next to the strength of the selected exercise over the range, both in the display unit.
+function bodyStrengthSeries(key, range) {
+  const combo = strengthVsBodyweight(historyInRange(range), getBody(), key);
+  const items = combo.points.map((p, i) => ({ day: p.day, value: p.value, weight: combo.weight[i].value }));
+  const buckets = weekBuckets(items);
+  return {
+    points: buckets.map((bucket) => ({
+      label: bucketLabel(bucket),
+      value: Math.round(toDisplay(Math.max(...bucket.items.map((x) => x.value)))),
+    })),
+    weight: buckets.map((bucket) => {
+      const weights = bucket.items.map((x) => x.weight).filter((w) => w != null);
+      return { value: weights.length ? Math.round(toDisplay(mean(weights)) * 10) / 10 : null };
+    }),
+  };
+}
+
+export function drawAnalytics(selectedKey, range) {
+  lineChart(document.querySelector('#volumeChart'), volumeSeries(range), { suffix: ` ${unit()}` });
+  const { points: strength, suffix } = strengthChartSeries(selectedKey, range);
+  // An exercise not trained in the range: say so instead of leaving a bare canvas under its value.
+  document.querySelector('#strengthChart')?.toggleAttribute('hidden', !strength.length);
+  document.querySelector('#strengthEmpty')?.toggleAttribute('hidden', !!strength.length);
+  lineChart(document.querySelector('#strengthChart'), strength, {
     color: token('--orange'),
     suffix,
   });
-  // Body weight next to the strength of the selected exercise, both in the display unit.
-  const combo = strengthVsBodyweight(getHistory(), getBody(), selectedKey);
+  const combo = bodyStrengthSeries(selectedKey, range);
   const comboReady = combo.points.length >= 2;
   document.querySelector('#bodyStrengthChart')?.toggleAttribute('hidden', !comboReady);
   document.querySelector('#bodyStrengthHint')?.toggleAttribute('hidden', !comboReady);
   document.querySelector('#bodyStrengthEmpty')?.toggleAttribute('hidden', comboReady);
   if (comboReady)
-    lineChart(
-      document.querySelector('#bodyStrengthChart'),
-      combo.points.slice(-16).map((p) => ({ label: p.label, value: Math.round(toDisplay(p.value)) })),
-      {
-        color: token('--orange'),
-        suffix,
-        fill: false,
-        secondary: {
-          points: combo.weight
-            .slice(-16)
-            .map((p) => ({ value: p.value == null ? null : Math.round(toDisplay(p.value) * 10) / 10 })),
-          color: token('--blue'),
-          suffix: ` ${unit()}`,
-        },
-      }
-    );
+    lineChart(document.querySelector('#bodyStrengthChart'), combo.points, {
+      color: token('--orange'),
+      suffix,
+      fill: false,
+      secondary: { points: combo.weight, color: token('--blue'), suffix: ` ${unit()}` },
+    });
   const all = getHistory();
   if (state.analyticsGroup)
     lineChart(document.querySelector('#groupChart'), groupSetsPerWeek(all, state.analyticsGroup), {

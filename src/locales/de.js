@@ -312,7 +312,10 @@ const ui = {
   'analytics.bodyStrength': 'Körpergewicht und Kraft',
   'analytics.bodyStrengthAria': 'Geschätztes Maximalgewicht der gewählten Übung und Körpergewicht',
   'analytics.bodyStrengthHint': 'Durchgezogen: Kraft der gewählten Übung. Gestrichelt: Körpergewicht.',
+  'analytics.strengthEmptyRange':
+    'Im gewählten Zeitraum gibt es kein Training mit dieser Übung. Wähle einen längeren Zeitraum.',
   'analytics.bodyStrengthEmpty': 'Ab zwei Trainings mit dieser Übung siehst du hier den Verlauf.',
+  'analytics.weekOf': 'Woche ab {date}',
   'analytics.records': 'Bestwerte-Zeitleiste',
   'session.title': 'Training',
   'session.volume': 'Volumen',
@@ -397,6 +400,8 @@ const ui = {
   'backup.csvImported.other': '{n} Trainings importiert.',
   'backup.csvSkipped.one': '{n} war schon vorhanden.',
   'backup.csvSkipped.other': '{n} waren schon vorhanden.',
+  'backup.csvFailed':
+    'Import nicht gespeichert: Der Speicher auf diesem Gerät ist voll. Es wurde nichts übernommen.',
   'backup.importedPhotosFailed': 'Backup importiert. {n} Foto(s) konnten nicht gespeichert werden.',
   'settings.title': 'Einstellungen',
   'settings.training': 'Training',

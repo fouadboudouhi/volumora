@@ -80,7 +80,7 @@ export function bind() {
     const plan = activePlan();
     if (!session || !plan) return;
     const day = addDay(plan, dayFromSession(session));
-    persistPlan(plan);
+    if (!persistPlan(plan)) return;
     savedAsDay.add(session.id);
     render();
     toast(t('summary.daySaved', { name: day.name }));

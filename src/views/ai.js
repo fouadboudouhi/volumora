@@ -9,7 +9,7 @@ import { aiTools, runTool, webSearchTool } from '../aiTools.js';
 import { fmtNumber, plural, t } from '../i18n.js';
 import { icon } from '../icons.js';
 import { libraryOf } from '../library.js';
-import { navigate, render } from '../render.js';
+import { goBack, navigate, render } from '../render.js';
 import { state } from '../state.js';
 import {
   addAiCost,
@@ -479,7 +479,7 @@ function bindChat() {
 }
 
 export function bind() {
-  document.querySelector('#aiBack')?.addEventListener('click', () => navigate(backTarget()));
+  document.querySelector('#aiBack')?.addEventListener('click', () => goBack(backTarget()));
   if (aiAvailable()) bindChat();
   else bindSetup();
 }

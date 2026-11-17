@@ -29,9 +29,10 @@ export function view() {
 }
 
 const save = (record) => {
-  saveCustomExercise(record);
+  const saved = saveCustomExercise(record);
   render();
-  toast(t('custom.saved'));
+  // A refused write has already said so; "saved" on top would replace that message.
+  if (saved) toast(t('custom.saved'));
 };
 
 export function bind() {

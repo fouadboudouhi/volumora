@@ -780,6 +780,71 @@ test('weekly stats: sets per group, weekly volume, frequency, record timeline, b
   assert.equal(combo.weight[0].value, 80, 'a measurement within ten days counts for earlier sessions too');
 });
 
+test('analytics charts follow the chosen range and turn many sessions into weeks instead of cutting them off', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const { volumeSeries, strengthChartSeries } = await import('../src/charts.js');
+  const { saveHistory } = await import('../src/storage.js');
+  const { startOfWeek } = await import('../src/stats.js');
+  // Sixty sessions, one every three days, newest first like the stored history; the weight rises over time.
+  const history = Array.from({ length: 60 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - 3 * i);
+    const day = dayKey(d);
+    const weight = 100 - i;
+    return {
+      id: `s${i}`,
+      day,
+      finishedAt: `${day}T10:00:00.000Z`,
+      volume: weight * 10,
+      entries: [
+        {
+          exerciseId: 'x',
+          libraryId: '0025',
+          trackType: 'weight_reps',
+          sets: [{ weight: String(weight), reps: '1', done: true, type: 'normal' }],
+        },
+      ],
+    };
+  });
+  saveHistory(history);
+  const month = volumeSeries('4w');
+  assert.equal(month.length, 10, 'four weeks: one point per session');
+  assert.ok(month.every((p) => !p.label.startsWith('Woche')));
+  assert.equal(month.at(-1).value, 1000);
+  const quarter = volumeSeries('3m');
+  assert.ok(
+    quarter.length >= 13 && quarter.length <= 15,
+    `three months: one point per week, not ${quarter.length}`
+  );
+  assert.ok(quarter.every((p) => p.label.startsWith('Woche ab')));
+  const oldest = history.filter((h) => h.day >= dayKey(new Date(Date.now() - 91 * 86400000))).at(-1);
+  assert.equal(
+    quarter[0].label,
+    `Woche ab ${fmtDate(startOfWeek(new Date(`${oldest.day}T12:00:00`)))}`,
+    'the chart starts where the range starts'
+  );
+  const everything = volumeSeries('all');
+  assert.ok(everything.length > quarter.length, 'a longer range shows more');
+  const strengthMonth = strengthChartSeries('0025', '4w');
+  assert.equal(strengthMonth.points.length, 10, 'the strength chart follows the range too');
+  assert.equal(strengthMonth.points.at(-1).value, 103, 'estimated 1RM of the newest 100 kg × 1');
+  const strengthAll = strengthChartSeries('0025', 'all').points;
+  assert.ok(strengthAll.length > strengthChartSeries('0025', '3m').points.length);
+  assert.ok(
+    strengthAll.every((p, i) => !i || p.value > strengthAll[i - 1].value),
+    'a week shows its best'
+  );
+  saveHistory([]);
+});
+
 test('progression: stall detection, per-exercise increment and 1RM reps table', async () => {
   const { suggestion, stalled, repsAtPercent } = await import('../src/workout.js');
   const session = (id, day, weight, reps) => ({
@@ -1001,6 +1066,33 @@ test('Strong export: pounds become kilograms, timer and note rows are skipped, w
   assert.equal(parseImport('a,b\n1,2\n').source, null);
 });
 
+test('current Strong export: units in the header, duration in seconds, distance in metres', () => {
+  const parsed = parseImport(readFileSync(new URL('./fixtures/strong-2024.csv', import.meta.url), 'utf8'), {
+    unit: 'lbs',
+  });
+  assert.equal(parsed.source, 'strong');
+  assert.equal(parsed.unitAssumed, false, 'the header says kilograms, so nothing is assumed');
+  const push = parsed.sessions[1];
+  assert.deepEqual([push.dayName, push.duration, push.totalSets], ['Push Day', 4320, 3]);
+  assert.deepEqual(
+    push.entries.map((e) => e.sets.map((x) => `${x.type}:${x.weight}x${x.reps}`).join(' ')),
+    ['normal:82.5x8 normal:82.5x8', 'warmup:60x5 normal:100x5']
+  );
+  const run = parsed.sessions[0];
+  assert.equal(run.duration, 1500);
+  assert.deepEqual(
+    [run.entries[0].trackType, run.entries[0].sets[0].distance, run.entries[0].sets[0].time],
+    ['distance_time', 5, 1500]
+  );
+  const pounds = parseImport(
+    'Date,Workout Name,Duration (sec),Exercise Name,Set Order,Weight (lbs),Reps,Distance (miles),Seconds\n2024-10-12 10:03:00,Legs,2700,Squat (Barbell),1,100,5,0,0\n2024-10-12 10:03:00,Legs,2700,Running,1,0,0,2,900\n'
+  );
+  assert.equal(pounds.unitAssumed, false);
+  assert.equal(pounds.sessions[0].duration, 2700);
+  assert.equal(pounds.sessions[0].entries[0].sets[0].weight, 45.359);
+  assert.equal(pounds.sessions[0].entries[1].sets[0].distance, 3.219);
+});
+
 test('merging an import skips sessions already there and creates each unknown exercise once', () => {
   const text = readFileSync(new URL('./fixtures/hevy.csv', import.meta.url), 'utf8');
   const once = mergeImport([], [], parseImport(text));
@@ -1026,6 +1118,48 @@ test('merging an import skips sessions already there and creates each unknown ex
     once.history[0].imported.key,
     'the import marker survives a backup'
   );
+});
+
+test('an import that cannot be stored says so and takes back the custom exercises it wrote', async () => {
+  const store = new Map();
+  let full = false;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (full && k === 'volumora-history-v2') throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  // A failed write shows a toast; these stand in for the page it is drawn on.
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { importParsed } = await import('../src/importers.js');
+  const { getCustomExercises, getHistory, saveCustomExercises, saveHistory } =
+    await import('../src/storage.js');
+  saveHistory([]);
+  saveCustomExercises([]);
+  const text = readFileSync(new URL('./fixtures/hevy.csv', import.meta.url), 'utf8');
+  full = true;
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const failed = importParsed(parseImport(text));
+  globalThis.setTimeout = timer;
+  assert.equal(failed.saved, false, 'the caller learns that nothing was stored');
+  assert.deepEqual(getHistory(), []);
+  assert.deepEqual(getCustomExercises(), [], 'the custom exercise written first is taken back');
+  full = false;
+  const done = importParsed(parseImport(text));
+  assert.deepEqual(
+    [done.saved, done.added, getHistory().length, getCustomExercises().length],
+    [true, 2, 2, 1]
+  );
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
 });
 
 test('exercise names from other apps land on the catalogue entry', () => {
@@ -1766,6 +1900,126 @@ test('assistant tools: plans change completely or not at all, deleting asks, und
   delete globalThis.matchMedia;
   delete globalThis.document;
   setLanguage('de');
+});
+
+test('an assistant change the device could not store reaches Claude as an error, not as saved', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (k === 'volumora-body-v2' && store.has(k)) throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { runTool } = await import('../src/aiTools.js');
+  const { getBody, saveBody } = await import('../src/storage.js');
+  saveBody([]);
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const outcome = await runTool(
+    'add_body_entry',
+    { date: '2026-11-01', weight: 80 },
+    { confirm: async () => true }
+  );
+  globalThis.setTimeout = timer;
+  assert.match(outcome.error, /could not be stored/);
+  assert.equal(outcome.result, undefined);
+  assert.equal(outcome.action, undefined, 'nothing to undo');
+  assert.deepEqual(getBody(), []);
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
+});
+
+test('a write of other code that fails while the person decides does not turn a stored change into a failure', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (k === 'volumora-active-v2') throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { runTool } = await import('../src/aiTools.js');
+  const { allPlans: getPlans, savePlans, write } = await import('../src/storage.js');
+  const plans = getPlans();
+  const extra = { ...structuredClone(plans.items[0]), id: 'extra', name: 'Extra' };
+  savePlans({ ...plans, items: [...plans.items, extra] });
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const outcome = await runTool(
+    'delete_plan',
+    { plan_id: 'extra' },
+    {
+      // A sync download or the running workout writes while the dialog is open, and the storage refuses it.
+      confirm: async () => {
+        write('volumora-active-v2', { id: 'other' });
+        return true;
+      },
+    }
+  );
+  globalThis.setTimeout = timer;
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.result.deleted, true);
+  assert.equal(
+    getPlans().items.some((p) => p.id === 'extra'),
+    false
+  );
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
+});
+
+test('body entries are stored newest first by their date, however they got in', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const { runTool } = await import('../src/aiTools.js');
+  const { getBody, saveBody } = await import('../src/storage.js');
+  const { weightPoints } = await import('../src/charts.js');
+  const entry = (id, day, weight) => ({ id, day, date: `${day}T12:00:00.000Z`, weight });
+  // The form puts a new entry in front, whatever its date.
+  saveBody([
+    entry('late', '2026-09-01', 85.5),
+    entry('b', '2026-11-14', 81.3),
+    entry('c', '2026-11-07', 81.7),
+  ]);
+  assert.deepEqual(
+    getBody().map((e) => e.id),
+    ['b', 'c', 'late']
+  );
+  await runTool('add_body_entry', { date: '2026-10-01', weight: 83 }, { confirm: async () => true });
+  assert.deepEqual(
+    getBody().map((e) => e.day),
+    ['2026-11-14', '2026-11-07', '2026-10-01', '2026-09-01']
+  );
+  assert.deepEqual(
+    weightPoints('all').map((p) => p.value),
+    [85.5, 83, 81.7, 81.3],
+    'the chart ends with the newest value'
+  );
+  // An entry without a day key (from before day keys existed) is placed by its timestamp.
+  saveBody([{ id: 'old', date: '2026-08-01T12:00:00.000Z', weight: 90 }, ...getBody()]);
+  assert.equal(getBody().at(-1).id, 'old');
+  saveBody([]);
 });
 
 test('a spoken or typed set becomes its values', async () => {

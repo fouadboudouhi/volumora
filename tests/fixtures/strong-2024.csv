@@ -1,0 +1,7 @@
+Workout #,Date,Workout Name,Duration (sec),Exercise Name,Set Order,Weight (kg),Reps,RPE,Distance (meters),Seconds,Notes,Workout Notes
+1,2024-10-12 10:03:00,Push Day,4320,Bench Press (Barbell),1,82.5,8,8,0,0,,"Good session, felt fresh"
+1,2024-10-12 10:03:00,Push Day,4320,Bench Press (Barbell),2,82.5,8,,0,0,,"Good session, felt fresh"
+1,2024-10-12 10:03:00,Push Day,4320,Bench Press (Barbell),Rest Timer,0,0,,0,90,,"Good session, felt fresh"
+1,2024-10-12 10:03:00,Push Day,4320,Squat (Barbell),W1,60,5,,0,0,,"Good session, felt fresh"
+1,2024-10-12 10:03:00,Push Day,4320,Squat (Barbell),1,100,5,,0,0,Belt on,"Good session, felt fresh"
+2,2024-10-15 07:10:00,Cardio,1500,Running,1,0,0,,5000,1500,,
