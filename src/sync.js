@@ -248,6 +248,25 @@ const marksOf = async (data) =>
       Object.entries(PIECES).map(async ([name, piece]) => [name, await digest(JSON.stringify(piece(data)))])
     )
   );
+// The marks of a sign-in from before pieces had them, taken from the version it exchanged last, which the server
+// still holds. That version is on the device either as it was uploaded from here, or as loading it wrote it; a
+// piece is unchanged when it matches one of the two. Empty when the server no longer has the version.
+async function marksOfVersion(config) {
+  const response = await call(config, `/v1/snapshots/${config.version}`);
+  if (response.status === 404) return [];
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new SyncError('server');
+  }
+  try {
+    return await Promise.all([data, { ...data, backup: validateBackup(data.backup) }].map(marksOf));
+  } catch {
+    // Not a state of this app: there is nothing to take marks from.
+    return [];
+  }
+}
 // The pieces as they are stored at this very moment, read in one go: no change can slip in between them.
 const piecesNow = () => ({
   backup: { plans: allPlans(), settings: getSettings(), exercisePrefs: getPrefs() },
@@ -359,6 +378,8 @@ async function mergeSnapshot(config, { version, data }) {
     // What the server holds is no backup this app can read: there is nothing to bring in, and this device's
     // state goes up as the next version.
   }
+  // What each piece looked like at the last exchange: the marks kept from it, or else read from its version.
+  const bases = config.marks ? [config.marks] : config.version ? await marksOfVersion(config) : [];
   if (uploading) await uploading.catch(() => {});
   stopUnlessInForce(config);
   restoring = true;
@@ -377,9 +398,10 @@ async function mergeSnapshot(config, { version, data }) {
     }
     // Something to add from here: a change since the last exchange, or data that would not hold still.
     const pending = !theirs || !steady || hash !== config.hash;
-    // A sign-in from before the pieces had marks cannot tell which one changed: then all of them count as changed.
+    // Where nothing tells what a piece looked like then, it counts as changed.
+    const changed = (name) => !bases.some((base) => base[name] === marks[name]);
     const keep = Object.fromEntries(
-      Object.keys(PIECES).map((name) => [name, !steady || (pending && config.marks?.[name] !== marks[name])])
+      Object.keys(PIECES).map((name) => [name, !steady || (pending && changed(name))])
     );
     // Before the first-run flow is through no plan is stored, and the default one is made up anew each time it is
     // read. That is no change made here, and it must never go over the plans the account holds.

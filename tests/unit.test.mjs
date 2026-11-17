@@ -3124,6 +3124,89 @@ test('a device still in the first-run flow has no plan of its own to put over th
   }
 });
 
+test('a sign-in from before pieces had marks learns from the server which of them changed here', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const phone = new Map();
+  const tablet = new Map();
+  const planName = () => st.allPlans().items[0].name;
+  const rename = (name) =>
+    st.savePlans({ ...st.allPlans(), items: st.allPlans().items.map((p) => ({ ...p, name })) });
+  // The sign-in as the version before this update stored it: it knows its last version, but has no marks.
+  const asBefore = () => {
+    const { marks, latest, ...old } = sync.syncConfig();
+    localStorage.setItem('volumora-sync', JSON.stringify(old));
+    return old.version;
+  };
+  try {
+    app.use(phone);
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    await app.setUp();
+    st.saveAiMemory(['alt']);
+    await sync.syncNow();
+    // The tablet loaded the account's data before the update and has one workout that never went up.
+    app.use(tablet);
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'restored');
+    let version = asBefore();
+    st.saveHistory([workoutOn('tablet-1', '2026-11-12')]);
+    // Meanwhile on the phone the plan got a new name and the assistant noted something.
+    app.use(phone);
+    rename('Vom Handy');
+    st.saveAiMemory(['alt', 'Knie-OP am 3.11.']);
+    await sync.syncNow();
+    // First start after the update: the tablet asks the server for the version it had, and so knows that it
+    // changed neither the plan nor the memory. The phone's stay, and its own workout goes up.
+    app.use(tablet);
+    app.calls.length = 0;
+    await sync.syncNow({ look: true });
+    assert.ok(app.calls.includes(`GET /v1/snapshots/${version}`), 'the version it had is asked for');
+    assert.deepEqual([planName(), st.getAiMemory()], ['Vom Handy', ['alt', 'Knie-OP am 3.11.']]);
+    let stored = (await storedFor(s, 'anna')).data;
+    assert.deepEqual(
+      [stored.backup.plans.items[0].name, stored.aiMemory, stored.backup.history.map((h) => h.id)],
+      ['Vom Handy', ['alt', 'Knie-OP am 3.11.'], ['tablet-1']]
+    );
+    assert.ok(sync.syncConfig().marks, 'from now on the sign-in has its marks');
+
+    // The same for a tablet whose last exchange was an upload. What it did change since, a setting, stays.
+    version = asBefore();
+    st.saveSettings({ ...st.getSettings(), weeklyGoal: 5 });
+    app.use(phone);
+    await sync.syncNow({ look: true });
+    rename('Noch ein Name');
+    await sync.syncNow();
+    app.use(tablet);
+    await sync.syncNow({ look: true });
+    assert.deepEqual([planName(), st.getSettings().weeklyGoal], ['Noch ein Name', 5]);
+    stored = (await storedFor(s, 'anna')).data.backup;
+    assert.deepEqual([stored.plans.items[0].name, stored.settings.weeklyGoal], ['Noch ein Name', 5]);
+
+    // The server no longer has the version the tablet had: then nothing tells which piece changed, and as before
+    // the tablet keeps all of its own.
+    version = asBefore();
+    st.saveSettings({ ...st.getSettings(), weeklyGoal: 6 });
+    app.use(phone);
+    await sync.syncNow({ look: true });
+    rename('Dritter Name');
+    await sync.syncNow();
+    const { rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    await rm(join(s.dataDir, 'users', 'anna', 'snapshots', `${version}.json`));
+    app.use(tablet);
+    await sync.syncNow({ look: true });
+    assert.deepEqual([planName(), st.getSettings().weeklyGoal], ['Noch ein Name', 6]);
+    assert.equal((await storedFor(s, 'anna')).data.backup.plans.items[0].name, 'Noch ein Name');
+    await sync.signOut();
+  } finally {
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
 test('the data on a device belongs to one account: the next person gets none of it, and neither does their account', async () => {
   let clock = Date.UTC(2026, 10, 16, 8);
   const s = await syncServer({ now: () => (clock += 1000) });
