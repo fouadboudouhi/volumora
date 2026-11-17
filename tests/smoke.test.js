@@ -3083,6 +3083,43 @@ test('data left by a sign-out before owners were remembered: the person says who
   }
 });
 
+test('signing out promises only what it can keep, and says so when not everything was saved', async () => {
+  const sheetText = () => page.textContent('.sheet-backdrop.show .sheet');
+  const signOut = async () => {
+    await page.evaluate(async () => (await import('/src/render.js')).navigate('backup'));
+    await page.click('#syncOff');
+    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+  };
+  // The server of this installation never answers: what is waiting cannot be uploaded.
+  await signOut();
+  const asked = await sheetText();
+  assert.match(asked, /versucht vorher noch zu sichern, was offen ist, und sagt dir, wenn das nicht gelingt/);
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('#gateForm');
+  await page.waitForFunction(() =>
+    /Nicht alles ist gesichert/.test(document.querySelector('.sheet-backdrop.show .sheet')?.textContent || '')
+  );
+  assert.match(await sheetText(), /konnte vorher nicht mehr alles sichern.*liegt weiter auf diesem Gerät/);
+  await axeCheck('not everything saved at sign-out');
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+  assert.equal(await page.evaluate(() => localStorage.getItem('volumora-sync')), null);
+
+  // With a sign-in that has expired nothing is uploaded at all, and the question says so.
+  await page.evaluate(() => {
+    const config = { url: 'http://127.0.0.1:9', username: 'test', token: 'test.t', problem: 'session' };
+    localStorage.setItem('volumora-sync', JSON.stringify(config));
+  });
+  await signOut();
+  const expired = await sheetText();
+  assert.match(expired, /Die Anmeldung ist abgelaufen, deshalb kann die App vorher nichts mehr sichern/);
+  assert.doesNotMatch(expired, /versucht vorher/);
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForFunction(() =>
+    /Nicht alles ist gesichert/.test(document.querySelector('.sheet-backdrop.show .sheet')?.textContent || '')
+  );
+});
+
 test('the admin stores the Claude key, sets budgets and invites; everyone else just chats', async () => {
   const { createSyncServer, store } = await import('../sync-server/server.js');
   const { createServer } = await import('node:http');

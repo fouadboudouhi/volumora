@@ -538,7 +538,12 @@ const ui = {
   'sync.off': 'Abmelden',
   'sync.offTitle': 'Vom Server abmelden?',
   'sync.offText':
-    'Die App sichert vorher noch, was offen ist. Deine Daten bleiben auf dem Server und auf diesem Gerät. Um die App weiter zu nutzen, musst du dich wieder anmelden. Meldet sich hier ein anderes Konto an, werden die Daten vorher von diesem Gerät entfernt.',
+    'Die App versucht vorher noch zu sichern, was offen ist, und sagt dir, wenn das nicht gelingt. Deine Daten bleiben auf diesem Gerät, und was gesichert ist, bleibt auf dem Server. Um die App weiter zu nutzen, musst du dich wieder anmelden. Meldet sich hier ein anderes Konto an, werden die Daten vorher von diesem Gerät entfernt.',
+  'sync.offTextExpired':
+    'Die Anmeldung ist abgelaufen, deshalb kann die App vorher nichts mehr sichern: Was seit dem letzten Sichern geändert wurde, gibt es nur auf diesem Gerät. Deine Daten bleiben auf diesem Gerät, und was gesichert ist, bleibt auf dem Server. Um die App weiter zu nutzen, musst du dich wieder anmelden. Meldet sich hier ein anderes Konto an, werden die Daten vorher von diesem Gerät entfernt.',
+  'sync.offUnsavedTitle': 'Nicht alles ist gesichert',
+  'sync.offUnsaved':
+    'Du bist abgemeldet. Die App konnte vorher nicht mehr alles sichern. Was fehlt, liegt weiter auf diesem Gerät: Melde dich hier wieder an, damit die App es sichern kann.',
   'sync.error.url': 'Bitte trag eine Adresse ein, die mit https beginnt.',
   'sync.error.network': 'Der Server ist gerade nicht erreichbar. Die App versucht es später noch einmal.',
   'sync.error.user': 'Benutzername oder Passwort stimmt nicht.',

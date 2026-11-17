@@ -195,7 +195,9 @@ const atMost = (ms, job) => {
   return Promise.race([job, limit]).finally(() => clearTimeout(clock));
 };
 // The data stays on this device and stays this account's: what was still waiting is uploaded first, and the device
-// remembers whose data it holds, so the next sign-in can tell its own from someone else's.
+// remembers whose data it holds, so the next sign-in can tell its own from someone else's. That upload does not
+// happen with a sign-in that has expired and can fail without a connection, so this resolves to whether everything
+// on the device is in the account.
 export async function signOut() {
   clearTimeout(timer);
   timer = null;
@@ -216,7 +218,9 @@ export async function signOut() {
     }
   }
   disconnectSync();
+  const saved = !config || (await allSaved(config));
   if (config?.token) await call(config, '/v1/logout', { method: 'POST' }).catch(() => {});
+  return saved;
 }
 
 const snapshot = async () => ({
@@ -234,6 +238,9 @@ const digest = async (text) => {
 // What counts as a change: the data, not the moment it was packed.
 const contentOf = ({ savedAt, backup: { exportedAt, ...backup }, ...rest }) =>
   JSON.stringify({ backup, ...rest });
+// Whether everything on this device is in the account of `owner`, a sign-in or the note of one that ended: it is
+// when nothing changed since the last exchange that sign-in completed.
+const allSaved = async (owner) => !!owner.hash && owner.hash === (await digest(contentOf(await snapshot())));
 // The parts of a snapshot that are one piece each: a merge takes such a piece from one side as a whole. A mark per
 // piece, kept from the last exchange with the server, tells later whether this device changed it since.
 const PIECES = {
@@ -532,7 +539,7 @@ export async function deviceData(account) {
   const owner = dataOwner();
   if (!owner) return { whose: hasPersonalData() ? 'unknown' : 'none' };
   if (sameAccount(owner, account)) return { whose: 'own' };
-  const saved = !!owner.hash && owner.hash === (await digest(contentOf(await snapshot())));
+  const saved = await allSaved(owner);
   const running = sessionStarted(getActive());
   return { whose: 'other', username: owner.username, url: owner.url, saved, at: owner.at || '', running };
 }

@@ -3322,6 +3322,60 @@ test('the data on a device belongs to one account: the next person gets none of 
   }
 });
 
+test('signing out says whether everything on the device made it into the account', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const inAccount = async () => (await storedFor(s, 'anna')).data.backup.history.map((h) => h.id);
+  const online = globalThis.fetch;
+  const offline = () => Promise.reject(new TypeError('offline'));
+  try {
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    await app.setUp();
+    st.saveHistory([workoutOn('a1', '2026-11-01')]);
+    // With a connection, what was still waiting goes up first.
+    assert.equal(await sync.signOut(), true);
+    assert.deepEqual(await inAccount(), ['a1']);
+    // Without one it cannot: the workout stays on the device, and whoever signed out can be told.
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    st.saveHistory([workoutOn('a2', '2026-11-02'), ...st.getHistory()]);
+    globalThis.fetch = offline;
+    assert.equal(await sync.signOut(), false);
+    globalThis.fetch = online;
+    assert.deepEqual(await inAccount(), ['a1']);
+    // Signing in again makes up for it. With nothing waiting, a missing connection is no loss.
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'merged');
+    assert.deepEqual(await inAccount(), ['a2', 'a1']);
+    globalThis.fetch = offline;
+    assert.equal(await sync.signOut(), true);
+    globalThis.fetch = online;
+    // A sign-in the server no longer knows uploads nothing either.
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    await s.db.setPassword('anna', 'new-password-1');
+    st.saveHistory([workoutOn('a3', '2026-11-03'), ...st.getHistory()]);
+    await assert.rejects(sync.syncNow(), { code: 'session' });
+    localStorage.setItem('volumora-sync', JSON.stringify({ ...sync.syncConfig(), problem: 'session' }));
+    assert.equal(await sync.signOut(), false);
+    assert.deepEqual(await inAccount(), ['a2', 'a1']);
+    // What the app says before and after promises no more than that.
+    for (const dict of [de, en]) {
+      assert.match(dict['sync.offText'], /versucht vorher noch zu sichern|first tries to save/);
+      assert.match(
+        dict['sync.offTextExpired'],
+        /kann die App vorher nichts mehr sichern|cannot save anything first/
+      );
+      assert.match(dict['sync.offUnsaved'], /nicht mehr alles sichern|could not save everything/);
+    }
+  } finally {
+    globalThis.fetch = online;
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
 test('an exchange that is still running when its account signs out writes nothing afterwards', async () => {
   let clock = Date.UTC(2026, 10, 16, 8);
   const s = await syncServer({ now: () => (clock += 1000) });

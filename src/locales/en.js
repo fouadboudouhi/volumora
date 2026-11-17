@@ -549,7 +549,12 @@ const ui = {
   'sync.off': 'Sign out',
   'sync.offTitle': 'Sign out from the server?',
   'sync.offText':
-    'The app first saves what is still waiting. Your data stays on the server and on this device. To keep using the app you have to sign in again. If another account signs in here, the data is removed from this device first.',
+    'The app first tries to save what is still waiting, and tells you if that does not work. Your data stays on this device, and what is saved stays on the server. To keep using the app you have to sign in again. If another account signs in here, the data is removed from this device first.',
+  'sync.offTextExpired':
+    'Your sign-in has expired, so the app cannot save anything first: what was changed since the last save exists only on this device. Your data stays on this device, and what is saved stays on the server. To keep using the app you have to sign in again. If another account signs in here, the data is removed from this device first.',
+  'sync.offUnsavedTitle': 'Not everything is saved',
+  'sync.offUnsaved':
+    'You are signed out. The app could not save everything first. What is missing is still on this device: sign in here again so the app can save it.',
   'sync.error.url': 'Please enter an address that starts with https.',
   'sync.error.network': 'The server cannot be reached right now. The app will try again later.',
   'sync.error.user': 'Username or password is wrong.',

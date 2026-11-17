@@ -18,7 +18,7 @@ import {
   syncConfig,
   syncNow,
 } from '../sync.js';
-import { confirmDialog, sheet, toast } from '../ui.js';
+import { confirmDialog, infoDialog, sheet, toast } from '../ui.js';
 import { esc, fmtLong } from '../util.js';
 
 const errorText = (err) => t(`sync.error.${err instanceof SyncError ? err.code : 'server'}`);
@@ -206,15 +206,18 @@ export function bindSync() {
   });
   document.querySelector('#syncOff')?.addEventListener('click', async (e) => {
     const button = e.currentTarget;
+    // An expired sign-in uploads nothing any more, so the question promises nothing of the kind.
+    const expired = syncConfig()?.problem === 'session';
     const ok = await confirmDialog({
       title: t('sync.offTitle'),
-      text: t('sync.offText'),
+      text: t(expired ? 'sync.offTextExpired' : 'sync.offText'),
       confirmLabel: t('sync.off'),
     });
     if (!ok) return;
     // Signing out uploads what is still waiting first, which can take a moment.
     button.disabled = true;
-    await signOut();
+    const saved = await signOut();
     render();
+    if (!saved) infoDialog(t('sync.offUnsavedTitle'), t('sync.offUnsaved'));
   });
 }
