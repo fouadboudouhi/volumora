@@ -297,6 +297,18 @@ export function validateBackup(data) {
   return { plans: { activePlanId, items: plans }, history, body, settings, exercisePrefs, customExercises };
 }
 
+// Stores the photos of the given body entries and returns how many could not be stored. Those entries lose their
+// photo flag in the list as it is stored by then: the person may have saved an entry while the photos were written.
+async function storePhotos(entries) {
+  const failed = new Set();
+  for (const entry of entries) {
+    if (!entry.photo) continue;
+    await photos.set(entry.id, entry.photo).catch(() => failed.add(entry.id));
+  }
+  if (failed.size) saveBody(getBody().map((b) => (failed.has(b.id) ? { ...b, hasPhoto: false } : b)));
+  return failed.size;
+}
+
 // Replaces all local data with the validated backup. Returns the number of photos that could not be stored.
 // Throws when local storage is full; the existing data then stays as it was.
 export async function importBackup(backup) {
@@ -317,16 +329,8 @@ export async function importBackup(backup) {
     );
     throw new Error('storage');
   }
-  let failed = 0;
   await photos.clear().catch(() => {});
-  for (const entry of backup.body) {
-    if (!entry.photo) continue;
-    await photos.set(entry.id, entry.photo).catch(() => {
-      failed++;
-      body.find((b) => b.id === entry.id).hasPhoto = false;
-    });
-  }
-  if (failed) saveBody(body);
+  const failed = await storePhotos(backup.body);
   // Older backups keep custom exercises inside plans; move them into the store like the migration does.
   promoteCustomExercises();
   clearActive();
@@ -373,13 +377,5 @@ export async function mergeBackup(theirs, keep = {}) {
   }
   // Plans from an older version keep custom exercises inside; move them into the store like the migration does.
   if (!keep.plans) promoteCustomExercises();
-  let failed = 0;
-  for (const entry of entries) {
-    if (!entry.photo) continue;
-    await photos.set(entry.id, entry.photo).catch(() => {
-      failed++;
-      body.find((b) => b.id === entry.id).hasPhoto = false;
-    });
-  }
-  if (failed) saveBody(body);
+  await storePhotos(entries);
 }

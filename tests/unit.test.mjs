@@ -3504,6 +3504,65 @@ test('a merge keeps what both sides have: workouts, body entries and own exercis
   }
 });
 
+test('a body entry saved while a merge or a restore still stores photos stays', async () => {
+  const app = await appDevices();
+  const { st } = app;
+  const { importBackup, mergeBackup } = await import('../src/backup.js');
+  // A photo store that takes a moment and then refuses, like a full or unavailable IndexedDB.
+  globalThis.window = globalThis;
+  globalThis.indexedDB = {
+    open() {
+      const request = {};
+      setTimeout(() => request.onerror(), 20);
+      return request;
+    },
+  };
+  const photo = 'data:image/jpeg;base64,AAAA';
+  const weighIn = (id, day) => ({ id, date: `${day}T07:00:00.000Z`, day, weight: 80 });
+  const body = () => st.getBody().map((b) => [b.id, !!b.hasPhoto]);
+  try {
+    await app.setUp();
+    st.saveBody([weighIn('mine', '2026-11-01')]);
+    const theirs = validateBackup({
+      plans: st.allPlans(),
+      history: [],
+      body: [{ ...weighIn('with-photo', '2026-11-10'), photo }, weighIn('plain', '2026-11-09')],
+    });
+    // The lists are stored at once, the photos take their time. Meanwhile the person weighs in.
+    const merging = mergeBackup(theirs, { plans: true, settings: true, exercisePrefs: true });
+    assert.deepEqual(body(), [
+      ['with-photo', true],
+      ['plain', false],
+      ['mine', false],
+    ]);
+    st.saveBody([weighIn('meanwhile', '2026-11-11'), ...st.getBody()]);
+    await merging;
+    assert.deepEqual(
+      body(),
+      [
+        ['meanwhile', false],
+        ['with-photo', false],
+        ['plain', false],
+        ['mine', false],
+      ],
+      'the entry saved meanwhile is still there, and only the photo that failed is taken off its entry'
+    );
+    // The same while a backup is restored.
+    const restoring = importBackup(theirs);
+    st.saveBody([weighIn('meanwhile', '2026-11-11'), ...st.getBody()]);
+    assert.equal(await restoring, 1, 'one photo could not be stored');
+    assert.deepEqual(body(), [
+      ['meanwhile', false],
+      ['with-photo', false],
+      ['plain', false],
+    ]);
+  } finally {
+    delete globalThis.window;
+    delete globalThis.indexedDB;
+    app.done();
+  }
+});
+
 test('one invitation makes one account, however many ask in the same moment', async () => {
   const s = await syncServer();
   try {
