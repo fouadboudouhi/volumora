@@ -1,6 +1,7 @@
 # Volumora sync server
 
-Optional. Keeps snapshots of each account's data on a server you run, so a reinstall does not lose anything.
+Every Volumora installation signs in to an account here. Keeps snapshots of each account's data on a server you run,
+so a reinstall does not lose anything.
 Accounts are folders under `data/users/`; registration needs an invitation code.
 
 Run it with `docker compose up -d --build`. It listens on 127.0.0.1:8787; put HTTPS in front of it, for example

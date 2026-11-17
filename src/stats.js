@@ -111,6 +111,19 @@ function perWeek(history, weeks, today, valueOf) {
   });
   return buckets.map(({ label, value }) => ({ label, value }));
 }
+// Points of a chart, oldest first ({ day, ... }). Up to `max` each keeps its place; past that they no longer fit
+// side by side and are gathered per calendar week (`day` is then that Monday), so a long range is shown whole
+// instead of being cut to its newest part.
+export function weekBuckets(items, max = 24) {
+  if (items.length <= max) return items.map((item) => ({ day: item.day, week: false, items: [item] }));
+  const weeks = new Map();
+  items.forEach((item) => {
+    const monday = dayKey(startOfWeek(parseDate(item.day) || new Date()));
+    if (!weeks.has(monday)) weeks.set(monday, []);
+    weeks.get(monday).push(item);
+  });
+  return [...weeks].map(([day, list]) => ({ day, week: true, items: list }));
+}
 export const weeklyVolume = (history, weeks = 12, today = new Date()) =>
   perWeek(history, weeks, today, (h) => number(h.volume) || volumeOf(h));
 export const frequency = (history, weeks = 12, today = new Date()) => perWeek(history, weeks, today, () => 1);
@@ -166,7 +179,7 @@ export function strengthVsBodyweight(history, bodyEntries, key) {
     return best ? best.kg : null;
   };
   return {
-    points: sessions.map((s) => ({ label: fmtDate(s.day), value: s.value })),
+    points: sessions.map((s) => ({ day: s.day, label: fmtDate(s.day), value: s.value })),
     weight: sessions.map((s) => ({ value: nearest(s.day) })),
   };
 }

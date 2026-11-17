@@ -412,6 +412,96 @@ test('both dictionaries have the same keys and no empty texts', () => {
   for (const k of ek) assert.ok(typeof en[k] === 'string' && en[k].length, `${k} is empty in en`);
 });
 
+// An account is required and everything is copied to the server, so no text may still promise the opposite.
+test('first-run, sign-in and assistant hints do not promise an app without account', () => {
+  const stale =
+    /ohne Konto|bleibt alles auf diesem Gerät|nur auf diesem Gerät|without an account|everything stays on this device|lives only on this device/i;
+  for (const [name, dict] of [
+    ['de', de],
+    ['en', en],
+  ]) {
+    for (const key of [
+      'onboarding.welcomeText',
+      'home.backupText',
+      'gate.foot',
+      'settings.aiHint',
+      'sync.offText',
+    ])
+      assert.doesNotMatch(dict[key], stale, `${key} in ${name}`);
+    // After signing out the app shows only the sign-in screen.
+    assert.match(dict['sync.offText'], /wieder anmelden|sign in again/, `sync.offText in ${name}`);
+    // The hint also shows when only the sign-in expired (aiAccess.js), so it may not claim the server has no assistant.
+    assert.doesNotMatch(
+      dict['settings.aiHint'],
+      /bietet.*keinen Assistenten|does not offer/,
+      `settings.aiHint in ${name}`
+    );
+    assert.match(dict['settings.aiHint'], /neu an|sign in again/, `settings.aiHint in ${name}`);
+  }
+});
+
+// The chat and memory are part of every upload (sync.js), and the assistant usually runs on the server's key.
+test('the privacy text says what goes to the server and to Anthropic, and never the opposite', () => {
+  const stale = [
+    /Was er sich merkt, bleibt auf diesem Gerät|What it remembers stays on this device/,
+    /Der Chat bleibt auf diesem Gerät|The chat stays on this device/,
+    /nur aktiv, wenn du einen eigenen|only active once you enter your own/,
+    /erzeugt dein Gerät lokal|created locally by your device/,
+  ];
+  const facts = {
+    de: [
+      /Einladungscode/,
+      /Chat/,
+      /Gemerkte/,
+      /Monatsbudget/,
+      /Push/,
+      /bleibt.*Konto|Konto.*bleibt/,
+      /Konto löschen/,
+    ],
+    en: [
+      /invitation code/,
+      /chat/,
+      /remembers/,
+      /monthly budget/,
+      /push/,
+      /account stays/,
+      /delete an account/,
+    ],
+  };
+  for (const [name, dict] of [
+    ['de', de],
+    ['en', en],
+  ]) {
+    const text = dict['legal.privacyText'];
+    for (const pattern of stale) assert.doesNotMatch(text, pattern, `${name}: ${pattern}`);
+    for (const pattern of facts[name]) assert.match(text, pattern, `${name}: ${pattern}`);
+    // The chat is uploaded with everything else, so nothing "only" goes to Anthropic.
+    assert.doesNotMatch(
+      dict['ai.setupSent'],
+      /nur an Anthropic|only goes to Anthropic/,
+      `ai.setupSent in ${name}`
+    );
+  }
+});
+
+// The README and the file headers are what a reader trusts first; they still described an app without server.
+test('the README and the sync and Claude modules describe the app with account and server', () => {
+  const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const readme = file('README.md');
+  assert.doesNotMatch(readme, /keinen Account|kein Backend|Lokale Speicherung im Browser/);
+  // ALLOWED_ORIGINS only decides the CORS headers (server.js); requests from elsewhere are still processed.
+  assert.doesNotMatch(readme, /nimmt nur Anfragen/);
+  for (const fact of [/Konto/, /Einladungscode/, /DEFAULT_SYNC_URL/, /Monatsbudget/, /Push/, /GitHub Pages/])
+    assert.match(readme, fact);
+  const head = (path) => file(path).split('\n').slice(0, 4).join('\n');
+  assert.doesNotMatch(head('src/sync.js'), /Optional|Off unless/);
+  assert.doesNotMatch(
+    head('src/ai.js'),
+    /straight from\n?.*this browser to Anthropic, with the person's own key/
+  );
+  assert.doesNotMatch(head('sync-server/README.md'), /^Optional\./m);
+});
+
 test('exercise names resolve per language for library, built-in and custom exercises', () => {
   setLanguage('de');
   assert.equal(exerciseName({ id: 'x', libraryId: '0025', name: 'alt' }), 'Bankdrücken mit Langhantel');
@@ -780,6 +870,71 @@ test('weekly stats: sets per group, weekly volume, frequency, record timeline, b
   assert.equal(combo.weight[0].value, 80, 'a measurement within ten days counts for earlier sessions too');
 });
 
+test('analytics charts follow the chosen range and turn many sessions into weeks instead of cutting them off', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const { volumeSeries, strengthChartSeries } = await import('../src/charts.js');
+  const { saveHistory } = await import('../src/storage.js');
+  const { startOfWeek } = await import('../src/stats.js');
+  // Sixty sessions, one every three days, newest first like the stored history; the weight rises over time.
+  const history = Array.from({ length: 60 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - 3 * i);
+    const day = dayKey(d);
+    const weight = 100 - i;
+    return {
+      id: `s${i}`,
+      day,
+      finishedAt: `${day}T10:00:00.000Z`,
+      volume: weight * 10,
+      entries: [
+        {
+          exerciseId: 'x',
+          libraryId: '0025',
+          trackType: 'weight_reps',
+          sets: [{ weight: String(weight), reps: '1', done: true, type: 'normal' }],
+        },
+      ],
+    };
+  });
+  saveHistory(history);
+  const month = volumeSeries('4w');
+  assert.equal(month.length, 10, 'four weeks: one point per session');
+  assert.ok(month.every((p) => !p.label.startsWith('Woche')));
+  assert.equal(month.at(-1).value, 1000);
+  const quarter = volumeSeries('3m');
+  assert.ok(
+    quarter.length >= 13 && quarter.length <= 15,
+    `three months: one point per week, not ${quarter.length}`
+  );
+  assert.ok(quarter.every((p) => p.label.startsWith('Woche ab')));
+  const oldest = history.filter((h) => h.day >= dayKey(new Date(Date.now() - 91 * 86400000))).at(-1);
+  assert.equal(
+    quarter[0].label,
+    `Woche ab ${fmtDate(startOfWeek(new Date(`${oldest.day}T12:00:00`)))}`,
+    'the chart starts where the range starts'
+  );
+  const everything = volumeSeries('all');
+  assert.ok(everything.length > quarter.length, 'a longer range shows more');
+  const strengthMonth = strengthChartSeries('0025', '4w');
+  assert.equal(strengthMonth.points.length, 10, 'the strength chart follows the range too');
+  assert.equal(strengthMonth.points.at(-1).value, 103, 'estimated 1RM of the newest 100 kg × 1');
+  const strengthAll = strengthChartSeries('0025', 'all').points;
+  assert.ok(strengthAll.length > strengthChartSeries('0025', '3m').points.length);
+  assert.ok(
+    strengthAll.every((p, i) => !i || p.value > strengthAll[i - 1].value),
+    'a week shows its best'
+  );
+  saveHistory([]);
+});
+
 test('progression: stall detection, per-exercise increment and 1RM reps table', async () => {
   const { suggestion, stalled, repsAtPercent } = await import('../src/workout.js');
   const session = (id, day, weight, reps) => ({
@@ -813,6 +968,90 @@ test('progression: stall detection, per-exercise increment and 1RM reps table', 
   ];
   assert.equal(stalled(ex, rising), false);
   assert.equal(suggestion(ex, rising, today).kind, 'confirm');
+  // Double progression: the first set stays at 10 reps, the later sets catch up. More reps at the same weight is
+  // progress, so neither the workout screen nor Heute (both via suggestion) may call it stalled.
+  const sets = (reps) => reps.map((r) => ({ weight: '60', reps: String(r), done: true, type: 'normal' }));
+  const multi = (id, day, reps) => ({
+    ...session(id, day, 60, 10),
+    entries: [{ ...session().entries[0], sets: sets(reps) }],
+  });
+  const doubleProgression = [
+    multi('c', '2026-03-03', [10, 10, 9]),
+    multi('b', '2026-02-24', [10, 9, 8]),
+    multi('a', '2026-02-17', [10, 8, 7]),
+  ];
+  assert.equal(stalled(ex, doubleProgression), false, 'more reps in the later sets');
+  assert.notEqual(suggestion(ex, doubleProgression, today).kind, 'stall');
+  const sameWork = [
+    multi('c', '2026-03-03', [10, 9, 8]),
+    multi('b', '2026-02-24', [10, 8, 9]),
+    multi('a', '2026-02-17', [10, 9, 8]),
+  ];
+  assert.equal(stalled(ex, sameWork), true, 'the same reps in another order are no progress');
+  // The work counts at the heaviest weight: a lighter back-off set must neither hide double progression when it is
+  // left out nor fake progress when it is added.
+  const mixed = (id, day, list) => ({
+    ...session(id, day, 60, 10),
+    entries: [
+      {
+        ...session().entries[0],
+        sets: list.map(([w, r]) => ({ weight: String(w), reps: String(r), done: true, type: 'normal' })),
+      },
+    ],
+  });
+  const backOffDropped = [
+    mixed('c', '2026-03-03', [
+      [60, 10],
+      [60, 10],
+      [60, 10],
+    ]),
+    mixed('b', '2026-02-24', [
+      [60, 10],
+      [60, 9],
+      [60, 8],
+      [40, 5],
+    ]),
+    mixed('a', '2026-02-17', [
+      [60, 10],
+      [60, 8],
+      [60, 7],
+      [40, 10],
+    ]),
+  ];
+  assert.equal(stalled(ex, backOffDropped), false, 'more reps at 60 kg although the back-off set went');
+  assert.notEqual(suggestion(ex, backOffDropped, today).kind, 'stall');
+  const backOffAdded = [
+    mixed('c', '2026-03-03', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+      [60, 10],
+    ]),
+    mixed('b', '2026-02-24', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+      [60, 10],
+    ]),
+    mixed('a', '2026-02-17', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+    ]),
+  ];
+  assert.equal(stalled(ex, backOffAdded), true, 'an added lighter set is no progress at 100 kg');
+  const { deloadHint } = await import('../src/deload.js');
+  const across = (list) =>
+    list.map((s) => ({
+      ...s,
+      entries: ['0025', '0026', '0027'].map((libraryId) => ({
+        ...s.entries[0],
+        exerciseId: libraryId,
+        libraryId,
+      })),
+    }));
+  assert.equal(deloadHint(across(sameWork), today)?.reason, 'stall', 'Heute counts real stalls');
+  assert.equal(deloadHint(across(doubleProgression), today), null, 'Heute does not count double progression');
   const topOfRange = [session('c', '2026-03-03', 60, 12)];
   assert.equal(suggestion(ex, topOfRange, today).weight, 62.5, 'default increment');
   assert.equal(
@@ -917,6 +1156,33 @@ test('Strong export: pounds become kilograms, timer and note rows are skipped, w
   assert.equal(parseImport('a,b\n1,2\n').source, null);
 });
 
+test('current Strong export: units in the header, duration in seconds, distance in metres', () => {
+  const parsed = parseImport(readFileSync(new URL('./fixtures/strong-2024.csv', import.meta.url), 'utf8'), {
+    unit: 'lbs',
+  });
+  assert.equal(parsed.source, 'strong');
+  assert.equal(parsed.unitAssumed, false, 'the header says kilograms, so nothing is assumed');
+  const push = parsed.sessions[1];
+  assert.deepEqual([push.dayName, push.duration, push.totalSets], ['Push Day', 4320, 3]);
+  assert.deepEqual(
+    push.entries.map((e) => e.sets.map((x) => `${x.type}:${x.weight}x${x.reps}`).join(' ')),
+    ['normal:82.5x8 normal:82.5x8', 'warmup:60x5 normal:100x5']
+  );
+  const run = parsed.sessions[0];
+  assert.equal(run.duration, 1500);
+  assert.deepEqual(
+    [run.entries[0].trackType, run.entries[0].sets[0].distance, run.entries[0].sets[0].time],
+    ['distance_time', 5, 1500]
+  );
+  const pounds = parseImport(
+    'Date,Workout Name,Duration (sec),Exercise Name,Set Order,Weight (lbs),Reps,Distance (miles),Seconds\n2024-10-12 10:03:00,Legs,2700,Squat (Barbell),1,100,5,0,0\n2024-10-12 10:03:00,Legs,2700,Running,1,0,0,2,900\n'
+  );
+  assert.equal(pounds.unitAssumed, false);
+  assert.equal(pounds.sessions[0].duration, 2700);
+  assert.equal(pounds.sessions[0].entries[0].sets[0].weight, 45.359);
+  assert.equal(pounds.sessions[0].entries[1].sets[0].distance, 3.219);
+});
+
 test('merging an import skips sessions already there and creates each unknown exercise once', () => {
   const text = readFileSync(new URL('./fixtures/hevy.csv', import.meta.url), 'utf8');
   const once = mergeImport([], [], parseImport(text));
@@ -942,6 +1208,48 @@ test('merging an import skips sessions already there and creates each unknown ex
     once.history[0].imported.key,
     'the import marker survives a backup'
   );
+});
+
+test('an import that cannot be stored says so and takes back the custom exercises it wrote', async () => {
+  const store = new Map();
+  let full = false;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (full && k === 'volumora-history-v2') throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  // A failed write shows a toast; these stand in for the page it is drawn on.
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { importParsed } = await import('../src/importers.js');
+  const { getCustomExercises, getHistory, saveCustomExercises, saveHistory } =
+    await import('../src/storage.js');
+  saveHistory([]);
+  saveCustomExercises([]);
+  const text = readFileSync(new URL('./fixtures/hevy.csv', import.meta.url), 'utf8');
+  full = true;
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const failed = importParsed(parseImport(text));
+  globalThis.setTimeout = timer;
+  assert.equal(failed.saved, false, 'the caller learns that nothing was stored');
+  assert.deepEqual(getHistory(), []);
+  assert.deepEqual(getCustomExercises(), [], 'the custom exercise written first is taken back');
+  full = false;
+  const done = importParsed(parseImport(text));
+  assert.deepEqual(
+    [done.saved, done.added, getHistory().length, getCustomExercises().length],
+    [true, 2, 2, 1]
+  );
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
 });
 
 test('exercise names from other apps land on the catalogue entry', () => {
@@ -984,6 +1292,88 @@ test('logging: a tick adopts the grey values, an empty set is refused, the clock
   entry.sets[1].weight = '50';
   entry.sets[1].touched = true;
   assert.deepEqual(finishCounts(session), { done: 1, typed: 1, open: 1 });
+});
+
+test('replacing an exercise keeps the sets already ticked and puts the new one after it', async () => {
+  const { replaceSessionExercise } = await import('../src/workout.js');
+  const set = (weight, done) => ({ weight, reps: '8', rir: '', done, type: 'normal' });
+  const old = { id: 'a', libraryId: '0025', sets: 3, range: '8–12', rest: 90, supersetId: 'g' };
+  const other = { id: 'b', libraryId: '0001', sets: 3, range: '10–15', rest: 60 };
+  const session = {
+    detached: true,
+    exercises: [old, other],
+    entries: [
+      {
+        exerciseId: 'a',
+        libraryId: '0025',
+        trackType: 'weight_reps',
+        sets: [set('60', true), set('60', true), set('', false)],
+      },
+      { exerciseId: 'b', libraryId: '0001', trackType: 'weight_reps', sets: [set('', false)] },
+    ],
+  };
+  replaceSessionExercise(session, 0, { id: 'c', libraryId: '0003', sets: 4, range: '6–8', rest: 120 });
+  assert.deepEqual(
+    session.entries.map((e) => e.exerciseId),
+    ['a', 'c', 'b'],
+    'the old exercise stays, the new one comes right after it'
+  );
+  assert.deepEqual(
+    session.entries[0].sets.map((s) => [s.weight, s.done]),
+    [
+      ['60', true],
+      ['60', true],
+    ],
+    'exactly the ticked sets stay'
+  );
+  assert.equal(session.exercises[0].sets, 2);
+  assert.deepEqual(
+    [
+      session.exercises[1].sets,
+      session.exercises[1].range,
+      session.exercises[1].rest,
+      session.exercises[1].supersetId,
+    ],
+    [3, '8–12', 90, 'g'],
+    'the new exercise takes over the targets of the slot'
+  );
+  assert.equal(session.entries[1].sets.length, 3);
+  assert.ok(session.entries[1].sets.every((s) => !s.done));
+
+  // Nothing ticked yet: it simply replaces, as before.
+  replaceSessionExercise(session, 2, { id: 'd', libraryId: '0004' });
+  assert.deepEqual(
+    session.entries.map((e) => e.exerciseId),
+    ['a', 'c', 'd']
+  );
+  assert.deepEqual(
+    session.exercises.map((x) => x.id),
+    ['a', 'c', 'd']
+  );
+
+  // Only a warm-up ticked: that is no trained exercise, so it replaces in place. A warm-up next to a ticked
+  // working set stays, but the target counts the working sets only.
+  const warm = (sets) => ({
+    detached: true,
+    exercises: [{ id: 'w', libraryId: '0025', sets: 3, range: '8–12', rest: 90 }],
+    entries: [{ exerciseId: 'w', libraryId: '0025', trackType: 'weight_reps', sets }],
+  });
+  const warmupOnly = warm([{ ...set('20', true), type: 'warmup' }, set('', false), set('', false)]);
+  replaceSessionExercise(warmupOnly, 0, { id: 'e', libraryId: '0003' });
+  assert.deepEqual(
+    warmupOnly.entries.map((e) => e.exerciseId),
+    ['e']
+  );
+  const warmupAndOne = warm([{ ...set('20', true), type: 'warmup' }, set('60', true), set('', false)]);
+  replaceSessionExercise(warmupAndOne, 0, { id: 'e', libraryId: '0003' });
+  assert.deepEqual(
+    warmupAndOne.exercises.map((x) => [x.id, x.sets]),
+    [
+      ['w', 1],
+      ['e', 3],
+    ]
+  );
+  assert.equal(warmupAndOne.entries[0].sets.length, 2, 'the ticked warm-up stays with the ticked set');
 });
 
 test('finishing: open sets drop out, duration ends with the last set and has a cap', async () => {
@@ -1602,6 +1992,126 @@ test('assistant tools: plans change completely or not at all, deleting asks, und
   setLanguage('de');
 });
 
+test('an assistant change the device could not store reaches Claude as an error, not as saved', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (k === 'volumora-body-v2' && store.has(k)) throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { runTool } = await import('../src/aiTools.js');
+  const { getBody, saveBody } = await import('../src/storage.js');
+  saveBody([]);
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const outcome = await runTool(
+    'add_body_entry',
+    { date: '2026-11-01', weight: 80 },
+    { confirm: async () => true }
+  );
+  globalThis.setTimeout = timer;
+  assert.match(outcome.error, /could not be stored/);
+  assert.equal(outcome.result, undefined);
+  assert.equal(outcome.action, undefined, 'nothing to undo');
+  assert.deepEqual(getBody(), []);
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
+});
+
+test('a write of other code that fails while the person decides does not turn a stored change into a failure', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => {
+        if (k === 'volumora-active-v2') throw new Error('QuotaExceededError');
+        store.set(k, v);
+      },
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const el = () => ({ classList: { add() {}, remove() {} }, setAttribute() {}, append() {}, remove() {} });
+  globalThis.document = { createElement: el, body: el() };
+  globalThis.requestAnimationFrame = () => 0;
+  const { runTool } = await import('../src/aiTools.js');
+  const { allPlans: getPlans, savePlans, write } = await import('../src/storage.js');
+  const plans = getPlans();
+  const extra = { ...structuredClone(plans.items[0]), id: 'extra', name: 'Extra' };
+  savePlans({ ...plans, items: [...plans.items, extra] });
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const outcome = await runTool(
+    'delete_plan',
+    { plan_id: 'extra' },
+    {
+      // A sync download or the running workout writes while the dialog is open, and the storage refuses it.
+      confirm: async () => {
+        write('volumora-active-v2', { id: 'other' });
+        return true;
+      },
+    }
+  );
+  globalThis.setTimeout = timer;
+  assert.equal(outcome.error, undefined);
+  assert.equal(outcome.result.deleted, true);
+  assert.equal(
+    getPlans().items.some((p) => p.id === 'extra'),
+    false
+  );
+  delete globalThis.document;
+  delete globalThis.requestAnimationFrame;
+});
+
+test('body entries are stored newest first by their date, however they got in', async () => {
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, v),
+      removeItem: (k) => store.delete(k),
+    },
+  });
+  const { runTool } = await import('../src/aiTools.js');
+  const { getBody, saveBody } = await import('../src/storage.js');
+  const { weightPoints } = await import('../src/charts.js');
+  const entry = (id, day, weight) => ({ id, day, date: `${day}T12:00:00.000Z`, weight });
+  // The form puts a new entry in front, whatever its date.
+  saveBody([
+    entry('late', '2026-09-01', 85.5),
+    entry('b', '2026-11-14', 81.3),
+    entry('c', '2026-11-07', 81.7),
+  ]);
+  assert.deepEqual(
+    getBody().map((e) => e.id),
+    ['b', 'c', 'late']
+  );
+  await runTool('add_body_entry', { date: '2026-10-01', weight: 83 }, { confirm: async () => true });
+  assert.deepEqual(
+    getBody().map((e) => e.day),
+    ['2026-11-14', '2026-11-07', '2026-10-01', '2026-09-01']
+  );
+  assert.deepEqual(
+    weightPoints('all').map((p) => p.value),
+    [85.5, 83, 81.7, 81.3],
+    'the chart ends with the newest value'
+  );
+  // An entry without a day key (from before day keys existed) is placed by its timestamp.
+  saveBody([{ id: 'old', date: '2026-08-01T12:00:00.000Z', weight: 90 }, ...getBody()]);
+  assert.equal(getBody().at(-1).id, 'old');
+  saveBody([]);
+});
+
 test('a spoken or typed set becomes its values', async () => {
   const { parseSet } = await import('../src/speech.js');
   const cases = [
@@ -1632,6 +2142,26 @@ test('a spoken or typed set becomes its values', async () => {
   assert.deepEqual(parseSet('60', 'time'), { time: 60 });
   assert.deepEqual(parseSet('5 km in 25 Minuten', 'distance_time'), { distance: 5, time: 1500 });
   assert.deepEqual(parseSet('fünf Kilometer', 'distance_time'), { distance: 5 });
+  // Without unit words the values known for this set decide which number is the weight: light dumbbells and cables
+  // have fewer kilos than reps.
+  const light = { weight: 10, reps: 12 };
+  assert.deepEqual(parseSet('10 x 12', 'weight_reps', light), { weight: 10, reps: 12 });
+  assert.deepEqual(parseSet('12 mal 10', 'weight_reps', light), { weight: 10, reps: 12 });
+  assert.deepEqual(parseSet('8 mal 15', 'weight_reps', light), { weight: 8, reps: 15 });
+  assert.deepEqual(parseSet('acht mal fünfzehn', 'weight_reps', { weight: 7.5 }), { weight: 8, reps: 15 });
+  const heavy = { weight: 60, reps: 10 };
+  assert.deepEqual(parseSet('12 mal 60', 'weight_reps', heavy), { weight: 60, reps: 12 });
+  assert.deepEqual(parseSet('60 x 12', 'weight_reps', heavy), { weight: 60, reps: 12 });
+  assert.deepEqual(parseSet('10 x 12', 'weight_reps', {}), { weight: 12, reps: 10 }, 'nothing known: larger');
+  assert.deepEqual(parseSet('12 x 12', 'weight_reps', light), { weight: 12, reps: 12 });
+  assert.deepEqual(parseSet('7,5 x 15', 'weight_reps', { weight: 20, reps: 8 }), { weight: 7.5, reps: 15 });
+  assert.deepEqual(
+    parseSet('60', 'weight_reps', heavy),
+    { weight: 60 },
+    'one number goes to the closer value'
+  );
+  assert.deepEqual(parseSet('10', 'weight_reps', heavy), { reps: 10 });
+  assert.deepEqual(parseSet('10 Kilo 12', 'weight_reps', { weight: 12, reps: 10 }), { weight: 10, reps: 12 });
 });
 
 test('cost, search and citations: paid searches are counted, a refused search tool does not stop the chat', async () => {

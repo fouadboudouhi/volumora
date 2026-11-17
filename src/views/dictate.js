@@ -62,8 +62,9 @@ const preview = (values) =>
     .filter(Boolean)
     .join(' · ');
 
-// `onValues` gets the parsed values, in the person's unit, once they are clear.
-export function openDictation({ title, trackType, onValues }) {
+// `onValues` gets the parsed values, in the person's unit, once they are clear. `known` holds what this set is expected
+// to be ({ weight, reps } in the person's unit), which tells "10 x 12" on a dumbbell from 12 kg × 10.
+export function openDictation({ title, trackType, known = null, onValues }) {
   const box = document.createElement('form');
   box.className = 'dictate';
   box.noValidate = true;
@@ -79,7 +80,7 @@ export function openDictation({ title, trackType, onValues }) {
   let attempt = 0;
   let done = false;
 
-  const parsed = () => parseSet(input.value, trackType);
+  const parsed = () => parseSet(input.value, trackType, known);
   const showParsed = () => {
     const values = parsed();
     save.disabled = !values;
@@ -115,6 +116,17 @@ export function openDictation({ title, trackType, onValues }) {
     stop();
     close();
     onValues(values);
+  };
+  // Listening ends by itself only with a whole set: a half sentence like "60 Kilo" would otherwise take the reps
+  // silently from the last session. A tap on the button still logs what is there, as a tick would.
+  const finishHeard = () => {
+    const values = parsed();
+    if (values && (trackType !== 'weight_reps' || (values.weight && values.reps))) {
+      finish(values);
+      return true;
+    }
+    state.textContent = values ? `${preview(values)} · ${t('dictate.incomplete')}` : t('dictate.unclear');
+    return false;
   };
   const refused = (reason, detail) => {
     rememberRefusal(reason);
@@ -166,10 +178,7 @@ export function openDictation({ title, trackType, onValues }) {
     const waitForResult = () => {
       clearTimeout(waiting);
       waiting = setTimeout(() => {
-        const values = parsed();
-        if (values) return finish(values);
-        stop();
-        state.textContent = t('dictate.unclear');
+        if (!finishHeard()) stop();
       }, RESULT_TIMEOUT);
     };
     recognition.onstart = waitForResult;
@@ -178,11 +187,8 @@ export function openDictation({ title, trackType, onValues }) {
       rememberRefusal(null);
       const result = e.results[e.results.length - 1];
       input.value = result[0].transcript;
-      const values = showParsed();
-      if (result.isFinal) {
-        if (values) finish(values);
-        else state.textContent = t('dictate.unclear');
-      }
+      showParsed();
+      if (result.isFinal) finishHeard();
     };
     recognition.onerror = (e) => {
       if (REFUSALS.includes(e.error)) return refused(e.error, e.message);
@@ -195,10 +201,7 @@ export function openDictation({ title, trackType, onValues }) {
       clearTimeout(waiting);
       recognition = null;
       showListening(false);
-      if (done) return;
-      const values = parsed();
-      if (values) finish(values);
-      else state.textContent = t('dictate.unclear');
+      if (!done) finishHeard();
     };
     try {
       recognition.start();

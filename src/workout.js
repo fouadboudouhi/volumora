@@ -28,6 +28,7 @@ import {
   rangeMid,
   rangeMin,
   setsCount,
+  setVolume,
   uid,
   volumeOf,
 } from './util.js';
@@ -316,15 +317,26 @@ export function moveSessionExercise(session, from, to) {
   if (to < 0 || to >= session.exercises.length) return;
   for (const list of [session.exercises, session.entries]) [list[from], list[to]] = [list[to], list[from]];
 }
-// The replacement keeps the slot's targets (sets, range, rest, superset) and starts with fresh sets.
+// The replacement keeps the slot's targets (sets, range, rest, superset) and starts with fresh sets. Sets already
+// ticked were trained, so the old exercise stays with just those and the replacement follows right after it. Only
+// ticked working sets count for that: a warm-up alone is no trained exercise.
 export function replaceSessionExercise(session, index, ex) {
   detachSession(session);
   touchSession(session);
   const old = session.exercises[index];
   const next = { ...ex, sets: old.sets, range: old.range, rest: old.rest };
   if (old.supersetId) next.supersetId = old.supersetId;
-  session.exercises[index] = next;
-  session.entries[index] = entryFor(next);
+  const entry = session.entries[index];
+  const worked = entry.sets.filter((s) => s.done && isWorkSet(s)).length;
+  if (!worked) {
+    session.exercises[index] = next;
+    session.entries[index] = entryFor(next);
+    return;
+  }
+  session.exercises[index] = { ...old, sets: worked };
+  entry.sets = entry.sets.filter((s) => s.done);
+  session.exercises.splice(index + 1, 0, next);
+  session.entries.splice(index + 1, 0, entryFor(next));
 }
 export function mutateSession(planId, dayId, fn) {
   const session = activeSession(planId, dayId);
@@ -356,15 +368,27 @@ export function recentEntries(ex, limit = 3, history = getHistory()) {
   return rows;
 }
 const bestScoreOf = (entry) => Math.max(0, ...entry.sets.map((s) => setScore(s, entryTrackType(entry))));
+// The work of the logged sets: for weight × reps the volume at the heaviest weight of the session, so lighter
+// back-off or drop sets neither hide nor fake progress; otherwise the summed reps, seconds or kilometres.
+function workOf(entry) {
+  const type = entryTrackType(entry);
+  const sets = loggedSets(entry);
+  if (type !== 'weight_reps') return sets.reduce((sum, s) => sum + setScore(s, type), 0);
+  const top = Math.max(0, ...sets.map((s) => number(s.weight)));
+  return sets.filter((s) => number(s.weight) >= top).reduce((sum, s) => sum + setVolume(s), 0);
+}
 
-// Three sessions in a row without a better estimated 1RM, close to the all-time best: time for a lighter week.
-// Sessions already well below the best are that lighter week, so the advice cannot spiral downwards.
+// Three sessions in a row without a better estimated 1RM and without more work, close to the all-time best: time for
+// a lighter week. The work counts too, because adding reps in the later sets at the same weight (double progression)
+// is progress although the best set stays the same. Sessions already well below the best are that lighter week, so
+// the advice cannot spiral downwards.
 export function stalled(ex, history = getHistory()) {
-  const all = recentEntries(ex, Infinity, history).map(bestScoreOf);
+  const entries = recentEntries(ex, Infinity, history);
+  const all = entries.map(bestScoreOf);
   const recent = all.slice(0, 3);
   if (recent.length < 3 || recent.some((v) => !v)) return false;
-  const [newest, middle, oldest] = recent;
-  return newest <= oldest && middle <= oldest && newest >= Math.max(...all) * 0.95;
+  const flat = ([newest, middle, oldest]) => newest <= oldest && middle <= oldest;
+  return flat(recent) && flat(entries.slice(0, 3).map(workOf)) && recent[0] >= Math.max(...all) * 0.95;
 }
 
 const DAY_MS = 86400000;

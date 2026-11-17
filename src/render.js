@@ -1,6 +1,6 @@
 // Renders the current view into #app and wires its event handlers.
 import { drawAnalytics, drawBodyChart } from './charts.js';
-import { pushView } from './router.js';
+import { previousView, pushView } from './router.js';
 import { state } from './state.js';
 import * as admin from './views/admin.js';
 import * as ai from './views/ai.js';
@@ -23,7 +23,7 @@ import * as summary from './views/summary.js';
 import * as templates from './views/templates.js';
 import * as workout from './views/workout.js';
 import { isSignedIn } from './sync.js';
-import { needsOnboarding } from './storage.js';
+import { getActive, needsOnboarding } from './storage.js';
 
 const VIEWS = {
   home,
@@ -103,8 +103,44 @@ export function navigate(view, patch = {}, { replace = false } = {}) {
   render();
 }
 
+// history.back() lands a moment later: until it has, a second tap (a double tap on the arrow) must not step back again.
+let backPending = false;
+let backTimer = 0;
+function stepBack() {
+  if (backPending) return;
+  backPending = true;
+  clearTimeout(backTimer);
+  // In case the step never arrives (no entry below), the arrow does not stay dead.
+  backTimer = setTimeout(() => (backPending = false), 1000);
+  history.back();
+}
+
+// A back arrow: when the entry below in the history is the screen it leads to, step back to it, so the system back
+// afterwards goes on from there instead of returning to the screen just left.
+export function goBack(view) {
+  if (backPending) return;
+  if (previousView() === view) stepBack();
+  else navigate(view);
+}
+
+// A tab of the bottom bar. The first step away from Heute is an entry, so the system back returns there; switching
+// between the other tabs replaces it instead of piling up one entry per tap.
+export function switchTab(view) {
+  if (backPending) return;
+  if (state.view === 'home') navigate(view);
+  else if (view === 'home' && previousView() === 'home') stepBack();
+  else navigate(view, {}, { replace: true });
+}
+
 // The router calls this when the user steps back through the history: same as navigate, without a new entry.
 export function applyRoute(view, patch = {}) {
+  // A workout entry whose workout was finished or discarded would start an empty copy of it: step over it.
+  if (view === 'workout' && !getActive()) {
+    history.back();
+    return;
+  }
+  backPending = false;
+  clearTimeout(backTimer);
   Object.assign(state, patch);
   state.view = view;
   render();

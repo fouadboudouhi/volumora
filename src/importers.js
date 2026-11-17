@@ -454,7 +454,11 @@ function fromStrong(records, keys, unit, source) {
     meta: (r) => ({
       title: r.workout_name,
       start: parseStamp(r.date),
-      duration: parseDurationText(r.duration || r.workout_duration),
+      // Current exports write "Duration (sec)" as a number, older ones "1h 12m".
+      duration:
+        r.duration_sec !== undefined
+          ? number(r.duration_sec)
+          : parseDurationText(r.duration || r.workout_duration),
     }),
     exerciseKey: (r) => ({ key: r.exercise_name, name: r.exercise_name, note: r.notes }),
     // "Rest Timer" and "Note" rows carry no set.
@@ -471,7 +475,15 @@ function fromStrong(records, keys, unit, source) {
                   : toKg(r.weight, r.weight_unit),
             reps: number(r.reps),
             time: number(r.seconds),
-            distance: toKm(r.distance, r.distance_unit),
+            // Like the weight, the distance can carry its unit in the header: "Distance (meters)".
+            distance:
+              r.distance_meters !== undefined
+                ? number(r.distance_meters) / 1000
+                : r.distance_km !== undefined
+                  ? number(r.distance_km)
+                  : r.distance_miles !== undefined
+                    ? number(r.distance_miles) * MILE_TO_KM
+                    : toKm(r.distance, r.distance_unit),
             rpe: number(r.rpe),
           })
         : null,
@@ -497,7 +509,9 @@ export function parseImport(text, { unit = 'kg' } = {}) {
   const unknown = [
     ...new Set(sessions.flatMap((s) => s.entries.filter((e) => !e.libraryId).map((e) => e.name))),
   ];
-  return { source, sessions, unknown, unitAssumed: source === 'strong' && !keys.includes('weight_unit') };
+  // The unit is only assumed when neither a column nor the header names it.
+  const unitNamed = ['weight_unit', 'weight_kg', 'weight_lbs'].some((k) => keys.includes(k));
+  return { source, sessions, unknown, unitAssumed: source === 'strong' && !unitNamed };
 }
 
 // Merge into an existing history: sessions already imported (same source, start and title) are skipped,
@@ -538,9 +552,15 @@ export function mergeImport(history, customs, parsed) {
   };
 }
 
+// `saved` is false when the device storage refused the history: the custom exercises written for it are taken
+// back then, so a failed import leaves nothing behind and the caller can say so instead of reporting a count.
 export function importParsed(parsed) {
-  const result = mergeImport(getHistory(), getCustomExercises(), parsed);
-  if (result.created) saveCustomExercises(result.customs);
-  if (result.added) saveHistory(result.history);
-  return result;
+  const customs = getCustomExercises();
+  const result = mergeImport(getHistory(), customs, parsed);
+  if (result.created && !saveCustomExercises(result.customs)) return { ...result, saved: false };
+  if (result.added && !saveHistory(result.history)) {
+    if (result.created) saveCustomExercises(customs);
+    return { ...result, saved: false };
+  }
+  return { ...result, saved: true };
 }

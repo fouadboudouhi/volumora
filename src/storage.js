@@ -63,12 +63,16 @@ let changeListener = null;
 export const onDataChange = (listener) => {
   changeListener = listener;
 };
+// Counts refused writes, so a step made of several saves can tell afterwards whether all of them landed.
+let failedWrites = 0;
+export const writeFailures = () => failedWrites;
 export const write = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     changeListener?.(key);
     return true;
   } catch (err) {
+    failedWrites++;
     console.error('Speichern fehlgeschlagen', err);
     toast(t('storage.full'), { duration: 9000 });
     return false;
@@ -94,7 +98,7 @@ export function persistPlan(plan) {
   const index = data.items.findIndex((x) => x.id === plan.id);
   if (index < 0) data.items.push(plan);
   else data.items[index] = plan;
-  savePlans(data);
+  return savePlans(data);
 }
 
 export const getHistory = () => read(LS.history, []);
@@ -106,7 +110,15 @@ export const saveHistory = (history) => {
   return write(LS.history, history);
 };
 export const getBody = () => read(LS.body, []);
-export const saveBody = (entries) => write(LS.body, entries);
+// Kept newest first by date here, the one place every entry passes (form, assistant, import, restore), so a value
+// added for an earlier day lands in its place in the list, the chart and what the assistant reads. Entries of the
+// same day keep their order.
+const bodyDay = (entry) => entry?.day || (entry?.date ? dayKey(entry.date) : '');
+export const saveBody = (entries) =>
+  write(
+    LS.body,
+    [...entries].sort((a, b) => bodyDay(b).localeCompare(bodyDay(a)))
+  );
 export const getPrefs = () => ({ favorites: [], recent: [], ...read(LS.exercisePrefs, {}) });
 export const savePrefs = (prefs) => write(LS.exercisePrefs, prefs);
 
@@ -118,8 +130,7 @@ export function saveCustomExercise(record) {
   const index = list.findIndex((x) => x.id === record.id);
   if (index < 0) list.push(record);
   else list[index] = record;
-  saveCustomExercises(list);
-  return record;
+  return saveCustomExercises(list) ? record : null;
 }
 export function removeCustomExercise(id) {
   const list = getCustomExercises();
@@ -193,7 +204,8 @@ export const getAiKey = () => localStorage.getItem(LS.aiKey) || '';
 export const hasAiKey = () => !!getAiKey();
 export const saveAiKey = (key) => localStorage.setItem(LS.aiKey, key);
 export const clearAiKey = () => localStorage.removeItem(LS.aiKey);
-// The chat stays on this device too, the latest messages only.
+// Only the latest messages are kept. The chat goes into the account's copy on the server (sync.js), never into a
+// backup file.
 const MAX_CHAT = 60;
 // Only what the chat itself writes is read back: a message is a role and a text, a source a web address. A stored
 // chat can also come from the account (a restore), so anything of another shape is dropped rather than drawn.

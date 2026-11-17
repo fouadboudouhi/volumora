@@ -654,8 +654,9 @@ test('the browser back button closes overlays first and then steps back through 
   await page.keyboard.press('Escape');
   await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
   await page.waitForTimeout(50);
+  // The plans tab replaced the "Mehr" entry, so the step back lands on Heute.
   await page.goBack();
-  await page.waitForSelector('#installRow');
+  await page.waitForSelector('.next-card');
   // The exercise library behaves the same way.
   await page.click('[data-nav="plans"]');
   await page.click('[data-edit-plan]');
@@ -664,6 +665,51 @@ test('the browser back button closes overlays first and then steps back through 
   await page.goBack();
   await page.waitForSelector('.exercise-library', { state: 'detached' });
   assert.equal(await page.locator('#savePlan').count(), 1, 'still in the editor');
+});
+
+test('the back arrow steps back through the history and tabs do not pile up entries', async () => {
+  const length = () => page.evaluate(() => history.length);
+  const start = await length();
+  await page.click('[data-nav="more"]');
+  await page.click('[data-nav="analytics"]');
+  await page.click('[data-nav="plans"]');
+  await page.click('[data-nav="more"]');
+  assert.equal(await length(), start + 1, 'leaving Heute adds one entry, switching tabs replaces it');
+  await page.click('[data-nav="settings"]');
+  await page.waitForSelector('#settingsForm');
+  await page.click('.backrow .back');
+  await page.waitForSelector('#installRow');
+  assert.equal(await length(), start + 2, 'the arrow went back instead of adding an entry');
+  await page.goBack();
+  await page.waitForSelector('.next-card');
+  assert.equal(await page.locator('#settingsForm').count(), 0, 'system back does not return to the settings');
+});
+
+test('a double tap on a back arrow steps back once', async () => {
+  await page.click('[data-nav="more"]');
+  await page.click('[data-nav="settings"]');
+  await page.waitForSelector('#settingsForm');
+  await page.dblclick('.backrow .back');
+  await page.waitForSelector('#installRow');
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#installRow').count(), 1, 'still on Mehr, not on Heute');
+  assert.equal(await page.locator('.next-card').count(), 0);
+});
+
+test('the strength chart says so when the exercise was not trained in the range', async () => {
+  await seedHistory();
+  await page.evaluate(async () => {
+    const { getHistory, saveHistory } = await import('/src/storage.js');
+    saveHistory(getHistory().filter((h) => h.id === 's-old'));
+  });
+  await page.click('[data-nav="analytics"]');
+  await page.click('[data-analytics-tab="strength"]');
+  await page.click('[data-trend-exercise]');
+  await page.waitForSelector('#strengthEmpty:not([hidden])');
+  assert.equal(await page.locator('#strengthChart').isVisible(), false, 'no bare canvas');
+  await page.click('[data-range="all"]');
+  await page.waitForSelector('#strengthChart:not([hidden])');
+  assert.equal(await page.locator('#strengthEmpty').isVisible(), false);
 });
 
 test('charts follow the viewport width', async () => {
@@ -1246,6 +1292,34 @@ test('a running workout survives a deleted day, a stale history entry and starts
   await page.goBack();
   await page.waitForSelector('.workout-exercise');
   assert.equal(await first.locator('input[data-set-field="weight"][data-index="0"]').inputValue(), '60');
+});
+
+test('system back after finishing does not reopen the workout', async () => {
+  // Leave the workout with its arrow and come back to it, the way that left an entry for it behind.
+  await page.click('.next-card [data-start]');
+  const first = page.locator('.workout-exercise').first();
+  await first.locator('input[data-set-field="weight"][data-index="0"]').fill('60');
+  await first.locator('input[data-set-field="reps"][data-index="0"]').fill('8');
+  await first.locator('[data-set-done="0"]').click();
+  await page.click('#exitWorkout');
+  await page.waitForSelector('.resume-card');
+  await page.click('.resume-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await page.click('#finishWorkout');
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('.summary');
+  await page.click('#summaryDone');
+  await page.waitForSelector('.next-card');
+  await page.goBack();
+  await page.waitForFunction(() => history.state?.volumora?.view === 'home');
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator('.workout-exercise').count(), 0, 'no workout on screen');
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('volumora-active-v2')),
+    null,
+    'no empty copy of the workout was started'
+  );
+  assert.equal(await page.locator('.resume-card').count(), 0);
 });
 
 test('an action that navigates from a sheet leaves the history in order', async () => {
@@ -1979,6 +2053,116 @@ test('a workout set can be said, with the field as the way that always works', a
     { timeout: 12000 }
   );
   assert.equal(await page.locator('#dictateMic.listening').count(), 0);
+});
+
+test('a said set reads light weights by what is known, waits for both values and can be undone', async () => {
+  await page.click('.next-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await page.fill('[data-set-field="weight"][data-exercise="0"][data-index="0"]', '10');
+  await page.fill('[data-set-field="reps"][data-exercise="0"][data-index="0"]', '12');
+  await page.click('[data-set-done="0"][data-exercise="0"]');
+  const sets = () =>
+    page.evaluate(() =>
+      JSON.parse(localStorage.getItem('volumora-active-v2')).entries[0].sets.map((s) => [
+        s.weight,
+        s.reps,
+        s.done,
+      ])
+    );
+  const say = (transcript) =>
+    page.evaluate((text) => {
+      delete window.SpeechRecognition;
+      navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [{ stop() {} }] });
+      window.webkitSpeechRecognition = class {
+        start() {
+          setTimeout(() => {
+            this.onstart?.();
+            this.onresult?.({ results: [Object.assign([{ transcript: text }], { isFinal: true })] });
+          }, 10);
+        }
+        stop() {
+          this.onend?.();
+        }
+      };
+    }, transcript);
+  // "10 x 12" after a set of 10 kg × 12 is 10 kg, not 12 kg × 10.
+  await say('10 x 12');
+  await page.click('[data-dictate="0"]');
+  await page.waitForFunction(
+    () => JSON.parse(localStorage.getItem('volumora-active-v2')).entries[0].sets[1].done
+  );
+  assert.deepEqual((await sets())[1], ['10', '12', true]);
+  await page.waitForSelector('#dictateInput', { state: 'detached' });
+  assert.match(await page.textContent('.toast'), /Eingetragen: 10 kg × 12/);
+  await page.click('.toast-action');
+  await page.waitForFunction(
+    () => !JSON.parse(localStorage.getItem('volumora-active-v2')).entries[0].sets[1].done
+  );
+  assert.equal((await sets())[1][2], false, 'undone');
+  // Half a set is shown, but not logged by itself.
+  await say('60 Kilo');
+  await page.click('[data-dictate="0"]');
+  await page.waitForFunction(() =>
+    document.querySelector('.dictate-state')?.textContent.includes('Gewicht und Wiederholungen')
+  );
+  assert.match(await page.textContent('.dictate-state'), /60 kg/);
+  assert.equal((await sets())[1][2], false);
+  assert.equal(await page.locator('#dictateInput').count(), 1, 'the sheet stays open');
+});
+
+test('undoing a said set still hits its exercise after an earlier one was replaced', async () => {
+  await page.click('.next-card [data-start]');
+  await page.waitForSelector('.workout-exercise');
+  await page.fill('[data-set-field="weight"][data-exercise="0"][data-index="0"]', '40');
+  await page.fill('[data-set-field="reps"][data-exercise="0"][data-index="0"]', '9');
+  await page.click('[data-set-done="0"][data-exercise="0"]');
+  await page.evaluate(() => {
+    delete window.SpeechRecognition;
+    navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [{ stop() {} }] });
+    window.webkitSpeechRecognition = class {
+      start() {
+        setTimeout(() => {
+          this.onstart?.();
+          this.onresult?.({ results: [Object.assign([{ transcript: '50 Kilo 8 mal' }], { isFinal: true })] });
+        }, 10);
+      }
+      stop() {
+        this.onend?.();
+      }
+    };
+  });
+  const active = () => page.evaluate(() => JSON.parse(localStorage.getItem('volumora-active-v2')));
+  const { entries } = await active();
+  const second = entries[1].exerciseId;
+  await page.click('[data-dictate="1"]');
+  await page.waitForFunction(
+    () => JSON.parse(localStorage.getItem('volumora-active-v2')).entries[1].sets[0].done
+  );
+  await page.waitForSelector('#dictateInput', { state: 'detached' });
+  // While the toast is up, the first exercise (one set ticked) is replaced: it stays and the new one comes after it.
+  await page.click('[data-exercise-menu="0"]');
+  await page.getByRole('button', { name: 'Ersetzen', exact: true }).click();
+  await page.locator('.library-suggested .library-item [data-pick-exercise]').first().click();
+  await page.waitForSelector('.exercise-library', { state: 'detached' });
+  await page.click('.toast-action');
+  await page.waitForFunction(
+    (id) =>
+      !JSON.parse(localStorage.getItem('volumora-active-v2')).entries.find((e) => e.exerciseId === id).sets[0]
+        .done,
+    second
+  );
+  const after = await active();
+  assert.equal(after.entries.length, entries.length + 1);
+  assert.deepEqual(
+    [after.entries[0].sets[0].weight, after.entries[0].sets[0].done],
+    ['40', true],
+    'the ticked set of the first exercise is untouched'
+  );
+  assert.ok(
+    after.entries[1].sets.every((s) => !s.done),
+    'the new exercise got nothing'
+  );
+  assert.equal(after.entries[2].exerciseId, second);
 });
 
 test('the assistant knows the running workout, the summary and what it remembers', async () => {
@@ -2818,6 +3002,54 @@ test('review fixes: the KI tab survives a failed upload, short workouts show no 
   );
   const count = Number((await page.textContent('#libraryCount')).match(/\d+/)[0]);
   assert.ok(count > 0 && count < 50, `matches counted: ${count}`);
+});
+
+test('taking over a suggestion changes only the open sets, and the button goes once none is open', async () => {
+  await seedHistory();
+  await page.evaluate(async () => {
+    const { allPlans } = await import('/src/storage.js');
+    const plan = allPlans().items[0];
+    (await import('/src/render.js')).navigate('workout', { planId: plan.id, dayId: plan.days[0].id });
+  });
+  await page.waitForSelector('button.suggest-row');
+  const index = await page.getAttribute('button.suggest-row', 'data-apply-suggestion');
+  const suggested = await page.getAttribute('button.suggest-row', 'data-weight');
+  const field = (name, set) => `[data-set-field="${name}"][data-exercise="${index}"][data-index="${set}"]`;
+  const tick = (set) => page.click(`[data-set-done="${set}"][data-exercise="${index}"]`);
+  const sets = () =>
+    page.evaluate(
+      async (i) =>
+        (await import('/src/storage.js')).getActive().entries[i].sets.map((s) => [s.weight, s.done, !!s.pr]),
+      Number(index)
+    );
+  // A first set heavier than suggested, ticked: a record that must survive taking the suggestion over.
+  await page.fill(field('weight', 0), '99');
+  await page.fill(field('reps', 0), '8');
+  await tick(0);
+  await page.waitForFunction(
+    (selector) => document.querySelector(selector)?.closest('.set-card')?.classList.contains('complete'),
+    field('weight', 0)
+  );
+  const [first] = await sets();
+  assert.deepEqual(first, ['99', true, true]);
+  await page.click('button.suggest-row');
+  const after = await sets();
+  assert.deepEqual(after[0], ['99', true, true], 'the ticked set keeps its weight and its record mark');
+  assert.ok(
+    after.slice(1).every(([weight, done]) => !done && weight === suggested),
+    `open sets take the suggestion: ${JSON.stringify(after)}`
+  );
+  // Every working set ticked with its own weight: nothing is left to take over, so no button.
+  for (let set = 1; set < after.length; set++) {
+    await page.fill(field('weight', set), '97');
+    await page.fill(field('reps', set), '8');
+    await tick(set);
+  }
+  await page.waitForFunction(
+    (i) => !document.querySelector(`button.suggest-row[data-apply-suggestion="${i}"]`),
+    index
+  );
+  assert.ok((await sets()).slice(1).every(([weight, done]) => weight === '97' && done));
 });
 
 test('home: last workout, week dots, exercise preview; progress: tabs, last-week fallback, main-muscle sets', async () => {

@@ -1,5 +1,6 @@
-// Claude API client for the optional AI assistant. No SDK, since the app has no build step: plain fetch, straight from
-// this browser to Anthropic, with the person's own key and only after they send something.
+// Claude API client for the AI assistant. No SDK, since the app has no build step: plain fetch, only after the person
+// sends something. Usually through the sync server on its operator's key, else straight from this browser to Anthropic
+// with the person's own key (see aiAccess.js).
 const API = 'https://api.anthropic.com/v1';
 const API_VERSION = '2026-10-21';
 const TIMEOUT = 180000;
