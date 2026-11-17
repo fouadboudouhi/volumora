@@ -2749,6 +2749,678 @@ test('a name with a dot signs in like any other', async () => {
   }
 });
 
+// The app's side of the account, as far as it runs without a browser: src/sync.js against the real server. `use`
+// switches to another device's storage, `handlers` are what the app listens to in a browser, and `calls` is every
+// request that left the app.
+async function appDevices() {
+  const handlers = {};
+  const calls = [];
+  const real = { fetch: globalThis.fetch, now: Date.now };
+  globalThis.fetch = (url, options = {}) => {
+    calls.push(`${options.method || 'GET'} ${new URL(url).pathname}`);
+    return real.fetch(url, options);
+  };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.addEventListener = (name, fn) => (handlers[name] = fn);
+  globalThis.document = {
+    documentElement: { dataset: {} },
+    querySelector: () => null,
+    visibilityState: 'visible',
+    addEventListener: (name, fn) => (handlers[name] = fn),
+  };
+  const use = (store) =>
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => store.set(k, String(v)),
+        removeItem: (k) => store.delete(k),
+        key: (i) => [...store.keys()][i] ?? null,
+        get length() {
+          return store.size;
+        },
+      },
+    });
+  use(new Map());
+  const sync = await import('../src/sync.js');
+  const st = await import('../src/storage.js');
+  return {
+    sync,
+    st,
+    handlers,
+    calls,
+    use,
+    // Waits for something the app does on its own, in the background.
+    async until(check, message, ms = 8000) {
+      const end = performance.now() + ms;
+      while (!(await check())) {
+        assert.ok(performance.now() < end, message);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    },
+    // A device that finished the first-run flow: it has its plan.
+    async setUp() {
+      const { defaultPlan } = await import('../src/library.js');
+      const plan = defaultPlan();
+      st.markOnboarded();
+      st.savePlans({ activePlanId: plan.id, items: [plan] });
+    },
+    done() {
+      st.onDataChange(() => {});
+      globalThis.fetch = real.fetch;
+      Date.now = real.now;
+      delete globalThis.matchMedia;
+      delete globalThis.addEventListener;
+      delete globalThis.document;
+      setLanguage('de');
+    },
+  };
+}
+const workoutOn = (id, day, dayName = `Tag ${id}`, weight = '100') => ({
+  id,
+  planId: 'p',
+  planName: 'P',
+  dayId: 'd',
+  dayName,
+  startedAt: `${day}T10:00:00.000Z`,
+  finishedAt: `${day}T11:00:00.000Z`,
+  day,
+  duration: 3600,
+  totalSets: 1,
+  volume: 500,
+  markers: {},
+  entries: [
+    {
+      exerciseId: 'e',
+      name: 'Bankdrücken',
+      note: '',
+      sets: [{ weight, reps: '5', rir: '', rpe: '', done: true, warmup: false, type: 'normal' }],
+    },
+  ],
+});
+// What the server holds for an account: the newest snapshot, and how many versions there are.
+async function storedFor(s, username) {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const dir = join(s.dataDir, 'users', username, 'snapshots');
+  const files = (await readdir(dir).catch(() => [])).sort();
+  return {
+    versions: files.length,
+    data: files.length ? JSON.parse(await readFile(join(dir, files.at(-1)), 'utf8')) : null,
+  };
+}
+
+test('a second device sees new workouts by itself, and what both devices changed is merged', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const phone = new Map();
+  const tablet = new Map();
+  const ids = () => st.getHistory().map((h) => h.id);
+  const planName = () => st.allPlans().items[0].name;
+  try {
+    // The phone has the account and one workout; the tablet signs in and loads it.
+    app.use(phone);
+    await app.setUp();
+    st.saveHistory([workoutOn('w1', '2026-11-01')]);
+    const account = await sync.register(url, 'anna', 'long-enough', await s.db.createInvite());
+    await sync.uploadNow(account, { force: true });
+    app.use(tablet);
+    const second = await sync.signIn(url, 'anna', 'long-enough');
+    await sync.restoreSnapshot(second, await sync.fetchSnapshot(second));
+    assert.deepEqual(ids(), ['w1']);
+
+    // The phone trains. The tablet is opened later and has the workout without anyone doing anything.
+    app.use(phone);
+    st.saveHistory([workoutOn('w2', '2026-11-03'), ...st.getHistory()]);
+    assert.equal(await sync.uploadNow(), true);
+    let { versions } = await storedFor(s, 'anna');
+    app.use(tablet);
+    sync.startSync();
+    await app.until(() => ids().includes('w2'), 'the tablet never got the workout from the phone');
+    assert.deepEqual(ids(), ['w2', 'w1']);
+    await sync.syncNow();
+    assert.equal(
+      (await storedFor(s, 'anna')).versions,
+      versions,
+      'a device that only received has nothing to upload'
+    );
+
+    // Both change something before they hear of each other. The phone trains, renames its plan and adds an
+    // exercise of its own; the tablet sets a weekly goal, weighs in and is in the middle of a workout.
+    app.use(phone);
+    st.saveHistory([workoutOn('w3', '2026-11-05'), ...st.getHistory()]);
+    st.savePlans({ ...st.allPlans(), items: st.allPlans().items.map((p) => ({ ...p, name: 'Umbenannt' })) });
+    st.saveCustomExercises([{ id: 'c1', name: 'Eigene Übung', category: 'other', equipment: 'other' }]);
+    st.saveAiChat([{ role: 'user', text: 'Am Handy gefragt' }]);
+    assert.equal(await sync.uploadNow(), true);
+    app.use(tablet);
+    st.saveSettings({ ...st.getSettings(), weeklyGoal: 4 });
+    st.saveAiMemory(['Am Tablet gemerkt']);
+    st.saveBody([{ id: 'b1', date: '2026-11-06T07:00:00.000Z', day: '2026-11-06', weight: 80 }]);
+    st.saveActive({ id: 'running', dayName: 'Läuft gerade', entries: [] });
+    // The tablet goes to the background: what changed is uploaded right away, and the server refuses it.
+    document.visibilityState = 'hidden';
+    app.handlers.visibilitychange();
+    await app.until(
+      async () => (await storedFor(s, 'anna')).data.backup.settings.weeklyGoal === 4,
+      'what the tablet changed never reached the server'
+    );
+    await sync.syncNow();
+    const merged = (await storedFor(s, 'anna')).data.backup;
+    assert.deepEqual(
+      merged.history.map((h) => h.id),
+      ['w3', 'w2', 'w1'],
+      'the workout from the phone is still in the account'
+    );
+    assert.equal(
+      merged.plans.items[0].name,
+      'Umbenannt',
+      'the tablet did not touch its plans: the phone’s count'
+    );
+    assert.deepEqual(
+      merged.body.map((b) => b.id),
+      ['b1']
+    );
+    const both = (await storedFor(s, 'anna')).data;
+    assert.deepEqual(
+      [both.aiChat[0].text, both.aiMemory],
+      ['Am Handy gefragt', ['Am Tablet gemerkt']],
+      'chat and memory each come from the device that changed them'
+    );
+    assert.equal(st.getAiChat()[0].text, 'Am Handy gefragt');
+    assert.deepEqual(ids(), ['w3', 'w2', 'w1']);
+    assert.equal(planName(), 'Umbenannt');
+    assert.equal(st.getCustomExercises()[0].id, 'c1');
+    assert.equal(st.getSettings().weeklyGoal, 4);
+    assert.equal(st.getActive().id, 'running', 'a running workout always stays');
+    assert.equal(sync.syncConfig().problem || '', '', 'nobody is asked to choose');
+    ({ versions } = await storedFor(s, 'anna'));
+
+    // Back on the phone right away: it asked the server a moment ago in this test, so not again yet.
+    app.use(phone);
+    document.visibilityState = 'visible';
+    app.calls.length = 0;
+    app.handlers.visibilitychange();
+    await sync.syncNow();
+    assert.deepEqual(app.calls, [], 'not more often than every few minutes');
+    // A few minutes later it does, takes over what the tablet changed and uploads nothing itself.
+    const later = Date.now() + 5 * 60000;
+    Date.now = () => later;
+    app.handlers.visibilitychange();
+    await app.until(
+      () => st.getSettings().weeklyGoal === 4,
+      'the phone never got the setting from the tablet'
+    );
+    await sync.syncNow();
+    assert.deepEqual(ids(), ['w3', 'w2', 'w1']);
+    assert.equal(planName(), 'Umbenannt');
+    assert.equal(st.getBody()[0].id, 'b1');
+    assert.deepEqual(st.getAiMemory(), ['Am Tablet gemerkt']);
+    assert.equal((await storedFor(s, 'anna')).versions, versions, 'both hold the same now: nothing goes up');
+    // With nothing new on the server the question is all that is sent: no data comes down.
+    Date.now = () => later + 5 * 60000;
+    app.calls.length = 0;
+    app.handlers.visibilitychange();
+    await sync.syncNow();
+    assert.deepEqual(app.calls, ['GET /v1/snapshots']);
+    // Opened without a connection: nothing is waiting here, so that is no problem to report. The question is
+    // asked again as soon as the connection is back.
+    const online = globalThis.fetch;
+    globalThis.fetch = () => Promise.reject(new TypeError('offline'));
+    Date.now = () => later + 10 * 60000;
+    app.handlers.visibilitychange();
+    await sync.syncNow();
+    assert.equal(sync.syncConfig().problem || '', '');
+    globalThis.fetch = online;
+    app.calls.length = 0;
+    app.handlers.online();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await sync.syncNow();
+    assert.deepEqual(app.calls, ['GET /v1/snapshots']);
+
+    // The app is in use while a merge runs: a setting changed at that very moment is neither overwritten by the
+    // server's nor forgotten.
+    st.savePlans({
+      ...st.allPlans(),
+      items: st.allPlans().items.map((p) => ({ ...p, name: 'Noch einmal' })),
+    });
+    await sync.syncNow();
+    app.use(tablet);
+    const { subtle } = globalThis.crypto;
+    subtle.digest = function (...args) {
+      delete subtle.digest;
+      st.saveSettings({ ...st.getSettings(), weeklyGoal: 6 });
+      return subtle.digest(...args);
+    };
+    Date.now = () => later + 15 * 60000;
+    app.handlers.visibilitychange();
+    await app.until(
+      async () => (await storedFor(s, 'anna')).data.backup.settings.weeklyGoal === 6,
+      'a setting changed while the merge ran was lost'
+    );
+    await sync.syncNow();
+    assert.equal(st.getSettings().weeklyGoal, 6);
+    assert.equal(planName(), 'Noch einmal');
+    assert.equal((await storedFor(s, 'anna')).data.backup.plans.items[0].name, 'Noch einmal');
+    await sync.signOut();
+  } finally {
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('signing in again after the sign-in was lost keeps the workouts made meanwhile', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const ids = () => st.getHistory().map((h) => h.id);
+  try {
+    // A new phone registers: nothing to decide, the account starts with what is there.
+    assert.equal((await sync.deviceData({ url, username: 'anna' })).whose, 'none');
+    const first = await sync.register(url, 'anna', 'long-enough', await s.db.createInvite());
+    assert.equal(await sync.joinAccount(first), 'uploaded');
+    await app.setUp();
+    st.saveHistory([workoutOn('a1', '2026-11-01')]);
+    await sync.syncNow();
+    // Another device of the account adds a workout.
+    const other = await (
+      await s.call('/login', { method: 'POST', body: { username: 'anna', password: 'long-enough' } })
+    ).json();
+    const theirs = await s.call('/snapshot', { token: other.token });
+    const state = await theirs.json();
+    state.backup.history.unshift(workoutOn('a2', '2026-11-03'));
+    const put = await s.call('/snapshot', {
+      token: other.token,
+      method: 'PUT',
+      body: state,
+      headers: { 'if-match': theirs.headers.get('etag') },
+    });
+    assert.equal(put.status, 200);
+
+    // The server forgets every sign-in (a new password). The phone goes on being used.
+    await s.db.setPassword('anna', 'new-password-1');
+    st.saveHistory([workoutOn('a3', '2026-11-10'), ...st.getHistory()]);
+    await assert.rejects(sync.syncNow(), { code: 'session' });
+    assert.deepEqual(ids(), ['a3', 'a1']);
+
+    // Signing in again is the same account coming back to its own data: nothing to ask, nothing replaced.
+    assert.equal((await sync.deviceData({ url, username: 'anna' })).whose, 'own');
+    const again = await sync.signIn(url, 'anna', 'new-password-1');
+    assert.equal(await sync.joinAccount(again), 'merged');
+    assert.deepEqual(ids(), ['a3', 'a2', 'a1'], 'the workout made without a sign-in is still there');
+    assert.deepEqual(
+      (await storedFor(s, 'anna')).data.backup.history.map((h) => h.id),
+      ['a3', 'a2', 'a1'],
+      'and it is in the account now'
+    );
+    assert.equal(sync.syncConfig().token, again.token);
+    assert.equal(sync.syncConfig().problem || '', '');
+
+    // The same once more, but the connection drops right after the sign-in: the account is back on its data all
+    // the same, and the exchange is made up for later.
+    await s.db.setPassword('anna', 'new-password-2');
+    st.saveHistory([workoutOn('a4', '2026-11-12'), ...st.getHistory()]);
+    await assert.rejects(sync.syncNow(), { code: 'session' });
+    const third = await sync.signIn(url, 'anna', 'new-password-2');
+    const online = globalThis.fetch;
+    globalThis.fetch = () => Promise.reject(new TypeError('offline'));
+    assert.equal(await sync.joinAccount(third), 'waiting');
+    globalThis.fetch = online;
+    assert.equal(sync.syncConfig().token, third.token);
+    assert.equal(sync.syncConfig().problem, 'network');
+    assert.deepEqual(ids(), ['a4', 'a3', 'a2', 'a1']);
+    await sync.syncNow();
+    assert.equal((await storedFor(s, 'anna')).data.backup.history[0].id, 'a4');
+    await sync.signOut();
+  } finally {
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('a device still in the first-run flow has no plan of its own to put over the account’s', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const first = new Map();
+  const second = new Map();
+  try {
+    // Registered, but the first-run flow is not finished: no plan is stored, the app shows the default one.
+    app.use(first);
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    // Meanwhile another device signs in, sets itself up with a plan of its own and trains.
+    app.use(second);
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    await app.setUp();
+    st.savePlans({
+      ...st.allPlans(),
+      items: st.allPlans().items.map((p) => ({ ...p, name: 'Echter Plan' })),
+    });
+    st.saveHistory([workoutOn('w1', '2026-11-01')]);
+    await sync.syncNow();
+    // The first device hears of it. The default plan it shows is no change made there: the account's plan stays.
+    app.use(first);
+    await sync.syncNow({ look: true });
+    assert.equal(st.allPlans().items[0].name, 'Echter Plan');
+    assert.deepEqual(
+      st.getHistory().map((h) => h.id),
+      ['w1']
+    );
+    assert.equal((await storedFor(s, 'anna')).data.backup.plans.items[0].name, 'Echter Plan');
+    await sync.signOut();
+  } finally {
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('the data on a device belongs to one account: the next person gets none of it, and neither does their account', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const ids = () => st.getHistory().map((h) => h.id);
+  const historyOf = async (username) => (await storedFor(s, username)).data.backup.history.map((h) => h.id);
+  try {
+    await sync.joinAccount(await sync.register(url, 'alice', 'long-enough', await s.db.createInvite()));
+    await app.setUp();
+    st.saveHistory([workoutOn('a1', '2026-11-01')]);
+    st.saveBody([{ id: 'b1', date: '2026-11-01T12:00:00.000Z', day: '2026-11-01', weight: 61.5 }]);
+    st.saveAiMemory(['Alice hat eine Schulterverletzung']);
+    localStorage.setItem('volumora-ai-key', 'sk-ant-api-alice');
+    await sync.syncNow();
+    // One more workout, and she signs out before the app got to upload it: signing out does that first.
+    st.saveHistory([workoutOn('a2', '2026-11-03'), ...st.getHistory()]);
+    await sync.signOut();
+    assert.equal(sync.isSignedIn(), false);
+    assert.deepEqual(await historyOf('alice'), ['a2', 'a1'], 'signing out uploads what was still waiting');
+    assert.deepEqual(ids(), ['a2', 'a1'], 'the data stays on the device');
+
+    // Bob wants in on the same phone. He is told whose data is there and that all of it is in her account.
+    const bob = { url, username: 'bob' };
+    const met = await sync.deviceData(bob);
+    assert.deepEqual(
+      { whose: met.whose, username: met.username, saved: met.saved },
+      { whose: 'other', username: 'alice', saved: true }
+    );
+    const invite = await s.db.createInvite();
+    const config = await sync.register(url, 'bob', 'long-enough', invite);
+    // Without his yes nothing happens: her data is neither uploaded into his account nor touched.
+    await assert.rejects(sync.joinAccount(config), { code: 'other' });
+    assert.equal((await storedFor(s, 'bob')).data, null);
+    assert.deepEqual(ids(), ['a2', 'a1']);
+    assert.equal(sync.isSignedIn(), false);
+    // With it, her data leaves the device and he starts empty.
+    assert.equal(await sync.joinAccount(config, { replace: true }), 'uploaded');
+    const his = (await storedFor(s, 'bob')).data;
+    assert.deepEqual(his.backup.history, []);
+    assert.deepEqual(his.backup.body, []);
+    assert.deepEqual(his.aiMemory, []);
+    assert.deepEqual([ids(), st.getBody(), st.getAiMemory()], [[], [], []]);
+    assert.equal(localStorage.getItem('volumora-ai-key'), null, 'her Claude key is gone with her data');
+    assert.equal(sync.syncConfig().username, 'bob');
+    assert.deepEqual(await historyOf('alice'), ['a2', 'a1'], 'her account is as she left it');
+
+    // Bob's sign-in is lost and he trains on. Alice comes back: she is told that part of his data is only here.
+    await app.setUp();
+    st.saveHistory([workoutOn('b1', '2026-11-08')]);
+    await sync.syncNow();
+    const savedAt = sync.syncConfig().at;
+    await s.db.setPassword('bob', 'another-password');
+    st.saveHistory([workoutOn('b2', '2026-11-09'), ...st.getHistory()]);
+    await assert.rejects(sync.syncNow(), { code: 'session' });
+    const back = await sync.deviceData({ url, username: 'alice' });
+    assert.deepEqual(
+      { whose: back.whose, username: back.username, saved: back.saved, at: back.at },
+      { whose: 'other', username: 'bob', saved: false, at: savedAt }
+    );
+    const hers = await sync.signIn(url, 'alice', 'long-enough');
+    assert.equal(await sync.joinAccount(hers, { replace: true }), 'restored');
+    assert.deepEqual(ids(), ['a2', 'a1']);
+    assert.deepEqual(st.getAiMemory(), ['Alice hat eine Schulterverletzung']);
+    assert.deepEqual(await historyOf('alice'), ['a2', 'a1'], 'nothing of his reached her account');
+
+    // She signs out and in again: her own data, so it is merged, whatever happened in between.
+    await sync.signOut();
+    assert.equal((await sync.deviceData({ url, username: 'alice' })).whose, 'own');
+    assert.equal((await sync.deviceData({ url: 'https://other.example', username: 'alice' })).whose, 'other');
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'alice', 'long-enough')), 'merged');
+    assert.deepEqual(ids(), ['a2', 'a1']);
+
+    // An installation that was signed out before owners were remembered: only the person can say whose data it is.
+    await sync.signOut();
+    localStorage.removeItem('volumora-owner');
+    assert.equal((await sync.deviceData(bob)).whose, 'unknown');
+    const his2 = await sync.signIn(url, 'bob', 'another-password');
+    await assert.rejects(sync.joinAccount(his2), { code: 'other' });
+    assert.deepEqual(ids(), ['a2', 'a1']);
+    assert.deepEqual(await historyOf('bob'), ['b1']);
+    // "Mine": it goes into the account that signs in, next to what is there.
+    assert.equal(await sync.joinAccount(his2, { adopt: true }), 'merged');
+    assert.deepEqual(await historyOf('bob'), ['b1', 'a2', 'a1']);
+    await sync.signOut();
+  } finally {
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('an exchange that is still running when its account signs out writes nothing afterwards', async () => {
+  let clock = Date.UTC(2026, 10, 16, 8);
+  const s = await syncServer({ now: () => (clock += 1000) });
+  const app = await appDevices();
+  const { sync, st } = app;
+  const url = s.base.slice(0, -3);
+  const phone = new Map();
+  const tablet = new Map();
+  const laptop = new Map();
+  const ids = () => st.getHistory().map((h) => h.id);
+  const historyOf = async (username) => (await storedFor(s, username)).data.backup.history.map((h) => h.id);
+  // A slow connection: the server's answer to one kind of request of the sign-in in use reaches the app only when
+  // the function `hold` returns is called. `answers` is every answer the server gave, `offline` a request that
+  // does not get through at all.
+  const direct = globalThis.fetch;
+  const answers = [];
+  let slow = null;
+  let offline = '';
+  globalThis.fetch = async (address, options = {}) => {
+    const request = `${options.method || 'GET'} ${new URL(address).pathname}`;
+    if (request === offline) throw new TypeError('offline');
+    const held = slow?.request === request && slow.as === options.headers?.authorization ? slow : null;
+    const response = await direct(address, options);
+    answers.push(`${request} ${response.status}`);
+    await held?.arrived;
+    return response;
+  };
+  const hold = (request) => {
+    let arrive;
+    const arrived = new Promise((resolve) => (arrive = resolve));
+    slow = { request, as: `Bearer ${sync.syncConfig().token}`, arrived };
+    return arrive;
+  };
+  // Signing out waits ten seconds for a silent server. Here that wait is over at once.
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = (run, ms, ...rest) => timeout(run, ms === 10000 ? 20 : ms, ...rest);
+  try {
+    // Anna has a phone and a tablet. Both train before they hear of each other.
+    app.use(phone);
+    await sync.joinAccount(await sync.register(url, 'anna', 'long-enough', await s.db.createInvite()));
+    await app.setUp();
+    st.saveHistory([workoutOn('a1', '2026-11-01')]);
+    st.saveAiMemory(['Annas Knie']);
+    await sync.syncNow();
+    app.use(tablet);
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'restored');
+    st.saveHistory([workoutOn('tablet', '2026-11-02'), ...st.getHistory()]);
+    await sync.syncNow();
+    app.use(phone);
+    st.saveHistory([workoutOn('a2', '2026-11-03'), ...st.getHistory()]);
+    // She signs out on the phone. Its upload is refused, it asks for what the tablet saved, and that answer is
+    // slow in coming. Signing out does not wait for it.
+    let arrive = hold('GET /v1/snapshot');
+    await sync.signOut();
+    assert.equal(sync.isSignedIn(), false);
+    assert.deepEqual(ids(), ['a2', 'a1']);
+    // Ben registers on the same phone and agrees to have her data removed from it.
+    const ben = await sync.register(url, 'ben', 'long-enough', await s.db.createInvite());
+    const met = await sync.deviceData(ben);
+    assert.deepEqual(
+      { whose: met.whose, username: met.username, saved: met.saved },
+      { whose: 'other', username: 'anna', saved: false }
+    );
+    answers.length = 0;
+    const joining = sync.joinAccount(ben, { replace: true });
+    // His sign-in has asked the server what his account holds (nothing). Only now the answer for Anna arrives.
+    await app.until(
+      () => answers.includes('GET /v1/snapshot 404'),
+      'the sign-in never asked for the account'
+    );
+    await new Promise((resolve) => timeout(resolve, 50));
+    arrive();
+    assert.equal(await joining, 'uploaded');
+    assert.deepEqual([ids(), st.getAiMemory()], [[], []], 'nothing of hers is on the phone he uses now');
+    const his = (await storedFor(s, 'ben')).data;
+    assert.deepEqual([his.backup.history, his.aiMemory], [[], []], 'and nothing of hers is in his account');
+    assert.equal(sync.syncConfig().username, 'ben');
+    assert.deepEqual(await historyOf('anna'), ['tablet', 'a1'], 'her account is as her tablet left it');
+
+    // The same slow answer on her tablet, where she signs out to delete everything on it (what "delete all data"
+    // does): the device stays empty.
+    app.use(laptop);
+    await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough'));
+    st.saveHistory([workoutOn('laptop', '2026-11-04'), ...st.getHistory()]);
+    await sync.syncNow();
+    app.use(tablet);
+    st.saveHistory([workoutOn('t2', '2026-11-05'), ...st.getHistory()]);
+    arrive = hold('GET /v1/snapshot');
+    await sync.signOut();
+    st.clearOwnStorage();
+    arrive();
+    await sync.syncNow();
+    assert.deepEqual([...tablet.keys()], [], 'what was deleted does not come back from the server');
+    assert.deepEqual(await historyOf('anna'), ['laptop', 'tablet', 'a1']);
+
+    // On the laptop she asks for the server's state to be loaded while the app is still waiting for an answer,
+    // and signs out before it got its turn: it is not loaded any more, and above all she is not signed in again.
+    app.use(laptop);
+    arrive = hold('GET /v1/snapshots');
+    const looking = sync.syncNow({ look: true });
+    const loading = sync.restoreSnapshot(sync.syncConfig(), await sync.fetchSnapshot());
+    await sync.signOut();
+    arrive();
+    await Promise.all([looking, assert.rejects(loading, { code: 'session' })]);
+    assert.equal(sync.isSignedIn(), false, 'a sign-out stays one');
+
+    // She signs in again, and out once more, this time without a connection for the sign-out itself: the server
+    // goes on accepting her sign-in. The device is emptied, and the exchange that was still waiting must not
+    // save the emptied device over what her account holds.
+    assert.equal(await sync.joinAccount(await sync.signIn(url, 'anna', 'long-enough')), 'merged');
+    const { versions } = await storedFor(s, 'anna');
+    arrive = hold('GET /v1/snapshots');
+    const asking = sync.syncNow({ look: true });
+    offline = 'POST /v1/logout';
+    await sync.signOut();
+    st.clearOwnStorage();
+    arrive();
+    await assert.rejects(asking, { code: 'session' });
+    assert.equal((await storedFor(s, 'anna')).versions, versions, 'nothing went up after the sign-out');
+    assert.deepEqual(await historyOf('anna'), ['laptop', 'tablet', 'a1']);
+  } finally {
+    globalThis.setTimeout = timeout;
+    app.done();
+    s.stop();
+    await s.remove();
+  }
+});
+
+test('a merge keeps what both sides have: workouts, body entries and own exercises by id', async () => {
+  const app = await appDevices();
+  const { st } = app;
+  const { mergeBackup } = await import('../src/backup.js');
+  try {
+    await app.setUp();
+    // 'alt 1' is an id from before ids were checked: a restore writes it differently, and so does the server's copy.
+    st.saveHistory([
+      workoutOn('both', '2026-11-02', 'vom Gerät'),
+      workoutOn('mine', '2026-11-01'),
+      workoutOn('alt 1', '2026-10-30'),
+    ]);
+    st.saveBody([{ id: 'both', date: '2026-11-02T07:00:00.000Z', day: '2026-11-02', weight: 80 }]);
+    st.saveCustomExercises([{ id: 'c-mine', name: 'Meine', category: 'other', equipment: 'other' }]);
+    st.saveSettings({ ...st.getSettings(), weeklyGoal: 4 });
+    st.saveActive({ id: 'running', entries: [] });
+    const theirs = validateBackup({
+      plans: { activePlanId: 'server', items: [{ id: 'server', name: 'Vom Server', days: [] }] },
+      history: [
+        workoutOn('theirs', '2026-11-03', 'Tag theirs', '110'),
+        workoutOn('both', '2026-11-02', 'vom Server'),
+        workoutOn('alt 1', '2026-10-30'),
+      ],
+      body: [
+        { id: 'theirs', date: '2026-11-05T07:00:00.000Z', weight: 79 },
+        { id: 'both', date: '2026-11-02T07:00:00.000Z', weight: 99 },
+      ],
+      settings: { weeklyGoal: 2 },
+      exercisePrefs: { favorites: ['0025'], recent: [] },
+      customExercises: [{ id: 'c-theirs', name: 'Ihre' }],
+    });
+    // The device changed its settings since it last heard from the server, nothing else.
+    await mergeBackup(theirs, { settings: true });
+    const history = st.getHistory();
+    assert.deepEqual(
+      history.map((h) => [h.id, h.dayName]),
+      [
+        ['theirs', 'Tag theirs'],
+        ['both', 'vom Gerät'],
+        ['mine', 'Tag mine'],
+        ['alt 1', 'Tag alt 1'],
+      ],
+      'newest first, the device keeps its own copy of a workout both have, and none is doubled'
+    );
+    assert.equal(
+      history[0].entries[0].sets[0].pr,
+      true,
+      'records are worked out over the whole history again'
+    );
+    assert.deepEqual(
+      st.getBody().map((b) => [b.id, b.weight]),
+      [
+        ['theirs', 79],
+        ['both', 80],
+      ]
+    );
+    assert.deepEqual(
+      st.getCustomExercises().map((c) => c.id),
+      ['c-mine', 'c-theirs']
+    );
+    assert.equal(st.getSettings().weeklyGoal, 4, 'changed here: stays');
+    assert.equal(st.allPlans().items[0].name, 'Vom Server', 'not changed here: the server’s');
+    assert.deepEqual(st.getPrefs().favorites, ['0025']);
+    assert.equal(st.getActive().id, 'running');
+    // With nothing new on the other side, nothing here is rewritten.
+    const before = [st.getHistory(), st.getBody(), st.getCustomExercises()].map((x) => JSON.stringify(x));
+    await mergeBackup(theirs, { settings: true, plans: true, exercisePrefs: true });
+    assert.deepEqual(
+      [st.getHistory(), st.getBody(), st.getCustomExercises()].map((x) => JSON.stringify(x)),
+      before
+    );
+  } finally {
+    app.done();
+  }
+});
+
 test('one invitation makes one account, however many ask in the same moment', async () => {
   const s = await syncServer();
   try {

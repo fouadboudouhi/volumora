@@ -21,6 +21,7 @@ import {
 } from './storage.js';
 import { LANGUAGES, t } from './i18n.js';
 import { GROUPS, exerciseName, normalizeLegacyExercise } from './library.js';
+import { annotateAll } from './records.js';
 import { SET_TYPES, TRACK_TYPES } from './sets.js';
 import { dayKey, parseDate, setVolume, uid, volumeOf } from './util.js';
 
@@ -331,4 +332,54 @@ export async function importBackup(backup) {
   clearActive();
   write(LS.schema, SCHEMA_VERSION);
   return failed;
+}
+
+// Brings another state of the same account onto this device without taking anything away: `theirs` is a validated
+// backup, usually what the server holds. Workouts, body entries and own exercises are kept from both sides by their
+// id, and where both have one, the copy on this device stays. Plans, settings and exercise preferences are one
+// piece each: `keep` names those this device keeps, the others are taken over. A running workout and the photos
+// already here are not touched. Everything but the new photos is stored before the first pause, so nothing else can
+// be stored in between. Throws when local storage is full; the data then stays as it was.
+export async function mergeBackup(theirs, keep = {}) {
+  const keys = [LS.plans, LS.history, LS.body, LS.settings, LS.exercisePrefs, LS.customExercises];
+  const before = keys.map((key) => localStorage.getItem(key));
+  // Ids are compared the way the validation writes them: a record here whose id it would rewrite is the same record
+  // as its rewritten copy over there. Nothing the other side holds twice is taken twice.
+  const missingIn = (mine, others) => {
+    const ids = new Set(mine.map((item) => asId(item.id)));
+    return others.filter((item) => !ids.has(item.id) && ids.add(item.id));
+  };
+  const newest = (field) => (a, b) => new Date(b[field]) - new Date(a[field]);
+  const sessions = missingIn(getHistory(), theirs.history);
+  const entries = missingIn(getBody(), theirs.body);
+  const customs = missingIn(getCustomExercises(), theirs.customExercises || []);
+  const body = [...entries.map(({ photo, ...rest }) => ({ ...rest, hasPhoto: !!photo })), ...getBody()].sort(
+    newest('date')
+  );
+  const stored = [
+    keep.plans || savePlans(theirs.plans),
+    // Record flags depend on everything that came before, so they are worked out again over the joined history.
+    !sessions.length || saveHistory(annotateAll([...sessions, ...getHistory()].sort(newest('finishedAt')))),
+    !entries.length || saveBody(body),
+    keep.settings || saveSettings(theirs.settings),
+    keep.exercisePrefs || savePrefs(theirs.exercisePrefs),
+    !customs.length || saveCustomExercises([...getCustomExercises(), ...customs]),
+  ].every(Boolean);
+  if (!stored) {
+    keys.forEach((key, i) =>
+      before[i] === null ? localStorage.removeItem(key) : localStorage.setItem(key, before[i])
+    );
+    throw new Error('storage');
+  }
+  // Plans from an older version keep custom exercises inside; move them into the store like the migration does.
+  if (!keep.plans) promoteCustomExercises();
+  let failed = 0;
+  for (const entry of entries) {
+    if (!entry.photo) continue;
+    await photos.set(entry.id, entry.photo).catch(() => {
+      failed++;
+      body.find((b) => b.id === entry.id).hasPhoto = false;
+    });
+  }
+  if (failed) saveBody(body);
 }

@@ -495,7 +495,8 @@ const ui = {
   'sync.serverIs': 'Server: {host}.',
   'sync.otherServer': 'Use another server',
   'sync.expiredTitle': 'Please sign in again',
-  'sync.expiredText': 'Your sign-in on the server has expired. Nothing is saved until then.',
+  'sync.expiredText':
+    'Your sign-in on the server has expired. Nothing is saved until you sign in again. Nothing gets lost in the meantime.',
   'sync.title': 'Save to your own server',
   'sync.hint':
     'The app saves your data by itself to the server. After a reinstall you sign in and get everything back.',
@@ -517,17 +518,35 @@ const ui = {
   'sync.foundLoad': 'Load',
   'sync.restored': 'Data loaded from the server',
   'sync.connected': 'Signed in, the app saves by itself from now on',
+  'sync.merged': 'Signed in. The data on this device and in the account has been merged.',
+  'sync.waiting': 'Signed in. The exchange with the server is still to come; the app will try again.',
+  'sync.news': 'New data from another device has been added',
+  'sync.otherTitle': 'Data of “{user}” is on this device',
+  'sync.otherText':
+    'The training data on this device belongs to the account “{user}”. It will be removed from this device before you sign in as “{next}”.',
+  'sync.otherSaved': 'All of it is saved in the account “{user}”.',
+  'sync.otherUnsaved':
+    'Careful: what was added or changed since {date} exists only on this device. It will be lost.',
+  'sync.otherUnknown': 'The app does not know whether all of it has been saved.',
+  'sync.otherConfirm': 'Remove and sign in',
+  'sync.unknownTitle': 'Is the data on this device yours?',
+  'sync.unknownText':
+    'There is training data on this device from an earlier sign-in. The app no longer knows which account it belongs to. If it is yours, it goes into the account “{next}”.',
+  'sync.unknownMine': 'Yes, it is mine',
+  'sync.unknownNotMine': 'No',
+  'sync.removeTitle': 'Remove the data from this device?',
+  'sync.removeText':
+    'The training data will then be removed from this device before you sign in as “{next}”. The app does not know whether it is saved anywhere.',
   'sync.on': 'Signed in as {user} at {host}. The app saves changes by itself.',
   'sync.lastDone': 'Last saved: {date}',
   'sync.now': 'Save now',
   'sync.saved': 'Saved',
   'sync.load': 'Load from server',
-  'sync.keepThis': 'Keep this device’s data',
   'sync.nothing': 'Nothing is stored on the server yet.',
   'sync.off': 'Sign out',
   'sync.offTitle': 'Sign out from the server?',
   'sync.offText':
-    'Your data on the server and on this device stays. To keep using the app you have to sign in again.',
+    'The app first saves what is still waiting. Your data stays on the server and on this device. To keep using the app you have to sign in again. If another account signs in here, the data is removed from this device first.',
   'sync.error.url': 'Please enter an address that starts with https.',
   'sync.error.network': 'The server cannot be reached right now. The app will try again later.',
   'sync.error.user': 'Username or password is wrong.',
@@ -538,7 +557,9 @@ const ui = {
   'sync.error.password': 'The password needs at least 8 characters.',
   'sync.error.blocked': 'Too many wrong attempts. Wait a few minutes.',
   'sync.error.size': 'Your data is too large for the server.',
-  'sync.error.newer': 'The server holds newer data from another device. Decide which one counts.',
+  'sync.error.newer':
+    'The server holds newer data from another device. The app merges both the next time it saves.',
+  'sync.error.other': 'There is data of another account on this device.',
   'sync.error.server': 'The server reported an error.',
   'admin.title': 'Administration',
   'admin.hint': 'Claude key, budgets and invitations',
