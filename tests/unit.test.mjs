@@ -813,6 +813,90 @@ test('progression: stall detection, per-exercise increment and 1RM reps table', 
   ];
   assert.equal(stalled(ex, rising), false);
   assert.equal(suggestion(ex, rising, today).kind, 'confirm');
+  // Double progression: the first set stays at 10 reps, the later sets catch up. More reps at the same weight is
+  // progress, so neither the workout screen nor Heute (both via suggestion) may call it stalled.
+  const sets = (reps) => reps.map((r) => ({ weight: '60', reps: String(r), done: true, type: 'normal' }));
+  const multi = (id, day, reps) => ({
+    ...session(id, day, 60, 10),
+    entries: [{ ...session().entries[0], sets: sets(reps) }],
+  });
+  const doubleProgression = [
+    multi('c', '2026-03-03', [10, 10, 9]),
+    multi('b', '2026-02-24', [10, 9, 8]),
+    multi('a', '2026-02-17', [10, 8, 7]),
+  ];
+  assert.equal(stalled(ex, doubleProgression), false, 'more reps in the later sets');
+  assert.notEqual(suggestion(ex, doubleProgression, today).kind, 'stall');
+  const sameWork = [
+    multi('c', '2026-03-03', [10, 9, 8]),
+    multi('b', '2026-02-24', [10, 8, 9]),
+    multi('a', '2026-02-17', [10, 9, 8]),
+  ];
+  assert.equal(stalled(ex, sameWork), true, 'the same reps in another order are no progress');
+  // The work counts at the heaviest weight: a lighter back-off set must neither hide double progression when it is
+  // left out nor fake progress when it is added.
+  const mixed = (id, day, list) => ({
+    ...session(id, day, 60, 10),
+    entries: [
+      {
+        ...session().entries[0],
+        sets: list.map(([w, r]) => ({ weight: String(w), reps: String(r), done: true, type: 'normal' })),
+      },
+    ],
+  });
+  const backOffDropped = [
+    mixed('c', '2026-03-03', [
+      [60, 10],
+      [60, 10],
+      [60, 10],
+    ]),
+    mixed('b', '2026-02-24', [
+      [60, 10],
+      [60, 9],
+      [60, 8],
+      [40, 5],
+    ]),
+    mixed('a', '2026-02-17', [
+      [60, 10],
+      [60, 8],
+      [60, 7],
+      [40, 10],
+    ]),
+  ];
+  assert.equal(stalled(ex, backOffDropped), false, 'more reps at 60 kg although the back-off set went');
+  assert.notEqual(suggestion(ex, backOffDropped, today).kind, 'stall');
+  const backOffAdded = [
+    mixed('c', '2026-03-03', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+      [60, 10],
+    ]),
+    mixed('b', '2026-02-24', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+      [60, 10],
+    ]),
+    mixed('a', '2026-02-17', [
+      [100, 5],
+      [100, 5],
+      [100, 5],
+    ]),
+  ];
+  assert.equal(stalled(ex, backOffAdded), true, 'an added lighter set is no progress at 100 kg');
+  const { deloadHint } = await import('../src/deload.js');
+  const across = (list) =>
+    list.map((s) => ({
+      ...s,
+      entries: ['0025', '0026', '0027'].map((libraryId) => ({
+        ...s.entries[0],
+        exerciseId: libraryId,
+        libraryId,
+      })),
+    }));
+  assert.equal(deloadHint(across(sameWork), today)?.reason, 'stall', 'Heute counts real stalls');
+  assert.equal(deloadHint(across(doubleProgression), today), null, 'Heute does not count double progression');
   const topOfRange = [session('c', '2026-03-03', 60, 12)];
   assert.equal(suggestion(ex, topOfRange, today).weight, 62.5, 'default increment');
   assert.equal(
@@ -984,6 +1068,88 @@ test('logging: a tick adopts the grey values, an empty set is refused, the clock
   entry.sets[1].weight = '50';
   entry.sets[1].touched = true;
   assert.deepEqual(finishCounts(session), { done: 1, typed: 1, open: 1 });
+});
+
+test('replacing an exercise keeps the sets already ticked and puts the new one after it', async () => {
+  const { replaceSessionExercise } = await import('../src/workout.js');
+  const set = (weight, done) => ({ weight, reps: '8', rir: '', done, type: 'normal' });
+  const old = { id: 'a', libraryId: '0025', sets: 3, range: '8–12', rest: 90, supersetId: 'g' };
+  const other = { id: 'b', libraryId: '0001', sets: 3, range: '10–15', rest: 60 };
+  const session = {
+    detached: true,
+    exercises: [old, other],
+    entries: [
+      {
+        exerciseId: 'a',
+        libraryId: '0025',
+        trackType: 'weight_reps',
+        sets: [set('60', true), set('60', true), set('', false)],
+      },
+      { exerciseId: 'b', libraryId: '0001', trackType: 'weight_reps', sets: [set('', false)] },
+    ],
+  };
+  replaceSessionExercise(session, 0, { id: 'c', libraryId: '0003', sets: 4, range: '6–8', rest: 120 });
+  assert.deepEqual(
+    session.entries.map((e) => e.exerciseId),
+    ['a', 'c', 'b'],
+    'the old exercise stays, the new one comes right after it'
+  );
+  assert.deepEqual(
+    session.entries[0].sets.map((s) => [s.weight, s.done]),
+    [
+      ['60', true],
+      ['60', true],
+    ],
+    'exactly the ticked sets stay'
+  );
+  assert.equal(session.exercises[0].sets, 2);
+  assert.deepEqual(
+    [
+      session.exercises[1].sets,
+      session.exercises[1].range,
+      session.exercises[1].rest,
+      session.exercises[1].supersetId,
+    ],
+    [3, '8–12', 90, 'g'],
+    'the new exercise takes over the targets of the slot'
+  );
+  assert.equal(session.entries[1].sets.length, 3);
+  assert.ok(session.entries[1].sets.every((s) => !s.done));
+
+  // Nothing ticked yet: it simply replaces, as before.
+  replaceSessionExercise(session, 2, { id: 'd', libraryId: '0004' });
+  assert.deepEqual(
+    session.entries.map((e) => e.exerciseId),
+    ['a', 'c', 'd']
+  );
+  assert.deepEqual(
+    session.exercises.map((x) => x.id),
+    ['a', 'c', 'd']
+  );
+
+  // Only a warm-up ticked: that is no trained exercise, so it replaces in place. A warm-up next to a ticked
+  // working set stays, but the target counts the working sets only.
+  const warm = (sets) => ({
+    detached: true,
+    exercises: [{ id: 'w', libraryId: '0025', sets: 3, range: '8–12', rest: 90 }],
+    entries: [{ exerciseId: 'w', libraryId: '0025', trackType: 'weight_reps', sets }],
+  });
+  const warmupOnly = warm([{ ...set('20', true), type: 'warmup' }, set('', false), set('', false)]);
+  replaceSessionExercise(warmupOnly, 0, { id: 'e', libraryId: '0003' });
+  assert.deepEqual(
+    warmupOnly.entries.map((e) => e.exerciseId),
+    ['e']
+  );
+  const warmupAndOne = warm([{ ...set('20', true), type: 'warmup' }, set('60', true), set('', false)]);
+  replaceSessionExercise(warmupAndOne, 0, { id: 'e', libraryId: '0003' });
+  assert.deepEqual(
+    warmupAndOne.exercises.map((x) => [x.id, x.sets]),
+    [
+      ['w', 1],
+      ['e', 3],
+    ]
+  );
+  assert.equal(warmupAndOne.entries[0].sets.length, 2, 'the ticked warm-up stays with the ticked set');
 });
 
 test('finishing: open sets drop out, duration ends with the last set and has a cap', async () => {
@@ -1632,6 +1798,26 @@ test('a spoken or typed set becomes its values', async () => {
   assert.deepEqual(parseSet('60', 'time'), { time: 60 });
   assert.deepEqual(parseSet('5 km in 25 Minuten', 'distance_time'), { distance: 5, time: 1500 });
   assert.deepEqual(parseSet('fünf Kilometer', 'distance_time'), { distance: 5 });
+  // Without unit words the values known for this set decide which number is the weight: light dumbbells and cables
+  // have fewer kilos than reps.
+  const light = { weight: 10, reps: 12 };
+  assert.deepEqual(parseSet('10 x 12', 'weight_reps', light), { weight: 10, reps: 12 });
+  assert.deepEqual(parseSet('12 mal 10', 'weight_reps', light), { weight: 10, reps: 12 });
+  assert.deepEqual(parseSet('8 mal 15', 'weight_reps', light), { weight: 8, reps: 15 });
+  assert.deepEqual(parseSet('acht mal fünfzehn', 'weight_reps', { weight: 7.5 }), { weight: 8, reps: 15 });
+  const heavy = { weight: 60, reps: 10 };
+  assert.deepEqual(parseSet('12 mal 60', 'weight_reps', heavy), { weight: 60, reps: 12 });
+  assert.deepEqual(parseSet('60 x 12', 'weight_reps', heavy), { weight: 60, reps: 12 });
+  assert.deepEqual(parseSet('10 x 12', 'weight_reps', {}), { weight: 12, reps: 10 }, 'nothing known: larger');
+  assert.deepEqual(parseSet('12 x 12', 'weight_reps', light), { weight: 12, reps: 12 });
+  assert.deepEqual(parseSet('7,5 x 15', 'weight_reps', { weight: 20, reps: 8 }), { weight: 7.5, reps: 15 });
+  assert.deepEqual(
+    parseSet('60', 'weight_reps', heavy),
+    { weight: 60 },
+    'one number goes to the closer value'
+  );
+  assert.deepEqual(parseSet('10', 'weight_reps', heavy), { reps: 10 });
+  assert.deepEqual(parseSet('10 Kilo 12', 'weight_reps', { weight: 12, reps: 10 }), { weight: 10, reps: 12 });
 });
 
 test('cost, search and citations: paid searches are counted, a refused search tool does not stop the chat', async () => {

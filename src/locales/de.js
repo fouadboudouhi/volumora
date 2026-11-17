@@ -1209,6 +1209,8 @@ export default {
   'dictate.why.other': 'Die Spracherkennung meldet: {code}',
   'dictate.reps': '{n} Wdh.',
   'dictate.save': 'Eintragen',
+  'dictate.incomplete': 'Sag Gewicht und Wiederholungen zusammen oder tippe auf „Eintragen“.',
+  'dictate.logged': 'Eingetragen: {set}',
   'ai.cut': 'Die Antwort wurde abgeschnitten, weil sie zu lang war.',
   'ai.planQuestion': 'Erstelle mir einen neuen Trainingsplan.',
   'ai.undone': 'Rückgängig gemacht',

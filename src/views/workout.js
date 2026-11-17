@@ -20,7 +20,7 @@ import { state } from '../state.js';
 import { clearActive, getActive, getSettings, saveActive, saveRestUntil, saveSettings } from '../storage.js';
 import { actionSheet, confirmDialog, sheet, toast, undoToast } from '../ui.js';
 import { fmtWeight, fromDisplay, toDisplay, unit } from '../units.js';
-import { esc, isWorkSet, number } from '../util.js';
+import { clone, esc, isWorkSet, number } from '../util.js';
 import {
   activeSession,
   addSessionExercise,
@@ -77,10 +77,12 @@ const SUGGESTION_TEXT = {
 const suggestionText = (s) =>
   t(SUGGESTION_TEXT[s.kind] || SUGGESTION_TEXT.confirm, { weight: fmtWeight(s.weight), weeks: s.weeks });
 
-// The suggested weight with a button to take it over; once the open sets already hold it, only the text stays.
+// The suggested weight with a button to take it over; once the open sets already hold it, or no set is open any more,
+// only the text stays.
+const openWorkSets = (entry) => entry.sets.filter((s) => isWorkSet(s) && !s.done);
 function suggestionRow(suggest, entry, index) {
-  const open = entry.sets.filter((s) => isWorkSet(s) && !s.done);
-  const applied = open.length > 0 && open.every((s) => number(s.weight) === suggest.weight);
+  const open = openWorkSets(entry);
+  const applied = open.every((s) => number(s.weight) === suggest.weight);
   const text = `${icon('trend')}<span>${esc(suggestionText(suggest))}</span>`;
   return applied
     ? `<p class="suggest-row">${text}</p>`
@@ -321,7 +323,21 @@ function tickSet(exerciseIndex, setIndex, values) {
   if (record) toast(t('workout.record', { set: describeSet(record, recordType) }), { duration: 4000 });
 }
 
-// Saying a set fills the next open one and ticks it, the same as tapping its check.
+// What the set about to be said should hold: its typed values, else the grey ones, else the last set ticked.
+function expectedValues(entry, setIndex, ex) {
+  const last = previousWork(ex);
+  const target = entry.sets[setIndex];
+  const grey =
+    setIndex >= 0
+      ? setReference(entry, setIndex, last)
+      : [...entry.sets].reverse().find((s) => s.done && isWorkSet(s)) || last[last.length - 1];
+  const weight = number(target?.weight) || number(grey?.weight);
+  const reps = number(target?.reps) || number(grey?.reps);
+  return { weight: weight ? toDisplay(weight) : null, reps: reps || null };
+}
+
+// Saying a set fills the next open one and ticks it, the same as tapping its check. Nothing asks for a confirmation,
+// so the toast says what was logged and can take it back.
 function dictateSet(exerciseIndex) {
   const entry = current().entries[exerciseIndex];
   const trackType = entryTrackType(entry);
@@ -333,9 +349,15 @@ function dictateSet(exerciseIndex) {
       n: before.filter(isWorkSet).length + 1,
     }),
     trackType,
+    known: expectedValues(entry, setIndex, exerciseAt(exerciseIndex)),
     onValues: (spoken) => {
+      let previous = null;
+      let added = false;
       mutate((s) => {
+        const count = s.entries[exerciseIndex].sets.length;
         setIndex = nextOpenSet(s, exerciseIndex);
+        added = s.entries[exerciseIndex].sets.length > count;
+        previous = clone(s.entries[exerciseIndex].sets[setIndex]);
       });
       const values = {
         ...spoken,
@@ -343,7 +365,21 @@ function dictateSet(exerciseIndex) {
       };
       tickSet(exerciseIndex, setIndex, values);
       const done = current().entries[exerciseIndex].sets[setIndex];
-      if (!done?.done) toast(t('workout.enterValues'));
+      if (!done?.done) {
+        toast(t('workout.enterValues'));
+        return;
+      }
+      const set = describeSet(done, trackType);
+      const id = current().entries[exerciseIndex].exerciseId;
+      undoToast(done.pr ? t('workout.record', { set }) : t('dictate.logged', { set }), () =>
+        mutate((s) => {
+          // By the exercise, not its place: a replace or move meanwhile shifts the places.
+          const sets = s.entries.find((e) => e.exerciseId === id)?.sets;
+          if (!sets?.[setIndex]) return;
+          if (added) sets.splice(setIndex, 1);
+          else sets[setIndex] = previous;
+        }, true)
+      );
     },
   });
 }
@@ -440,9 +476,10 @@ export function bind() {
         return;
       }
       const removed = sets[setIndex];
+      const id = current().entries[exerciseIndex].exerciseId;
       mutate((s) => s.entries[exerciseIndex].sets.splice(setIndex, 1), true);
       undoToast(t('workout.setDeleted'), () =>
-        mutate((s) => s.entries[exerciseIndex].sets.splice(setIndex, 0, removed), true)
+        mutate((s) => s.entries.find((e) => e.exerciseId === id)?.sets.splice(setIndex, 0, removed), true)
       );
     };
   });
@@ -571,7 +608,8 @@ export function bind() {
     b.onclick = () =>
       mutate(
         (s) =>
-          s.entries[number(b.dataset.applySuggestion)].sets.filter(isWorkSet).forEach((x) => {
+          // Ticked sets were lifted with their own weight; only what is still to come takes the suggestion.
+          openWorkSets(s.entries[number(b.dataset.applySuggestion)]).forEach((x) => {
             x.weight = String(b.dataset.weight);
           }),
         true

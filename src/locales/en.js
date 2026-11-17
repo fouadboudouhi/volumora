@@ -1191,6 +1191,8 @@ export default {
   'dictate.why.other': 'Speech recognition reports: {code}',
   'dictate.reps': '{n} reps',
   'dictate.save': 'Log set',
+  'dictate.incomplete': 'Say weight and reps together, or tap “Log set”.',
+  'dictate.logged': 'Logged: {set}',
   'ai.cut': 'The answer was cut off because it got too long.',
   'ai.planQuestion': 'Create a new training plan for me.',
   'ai.undone': 'Undone',
