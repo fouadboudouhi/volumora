@@ -21,6 +21,7 @@ import {
 } from './storage.js';
 import { LANGUAGES, t } from './i18n.js';
 import { GROUPS, exerciseName, normalizeLegacyExercise } from './library.js';
+import { annotateAll } from './records.js';
 import { SET_TYPES, TRACK_TYPES } from './sets.js';
 import { dayKey, parseDate, setVolume, uid, volumeOf } from './util.js';
 
@@ -296,6 +297,18 @@ export function validateBackup(data) {
   return { plans: { activePlanId, items: plans }, history, body, settings, exercisePrefs, customExercises };
 }
 
+// Stores the photos of the given body entries and returns how many could not be stored. Those entries lose their
+// photo flag in the list as it is stored by then: the person may have saved an entry while the photos were written.
+async function storePhotos(entries) {
+  const failed = new Set();
+  for (const entry of entries) {
+    if (!entry.photo) continue;
+    await photos.set(entry.id, entry.photo).catch(() => failed.add(entry.id));
+  }
+  if (failed.size) saveBody(getBody().map((b) => (failed.has(b.id) ? { ...b, hasPhoto: false } : b)));
+  return failed.size;
+}
+
 // Replaces all local data with the validated backup. Returns the number of photos that could not be stored.
 // Throws when local storage is full; the existing data then stays as it was.
 export async function importBackup(backup) {
@@ -316,19 +329,77 @@ export async function importBackup(backup) {
     );
     throw new Error('storage');
   }
-  let failed = 0;
   await photos.clear().catch(() => {});
-  for (const entry of backup.body) {
-    if (!entry.photo) continue;
-    await photos.set(entry.id, entry.photo).catch(() => {
-      failed++;
-      body.find((b) => b.id === entry.id).hasPhoto = false;
-    });
-  }
-  if (failed) saveBody(body);
+  const failed = await storePhotos(backup.body);
   // Older backups keep custom exercises inside plans; move them into the store like the migration does.
   promoteCustomExercises();
   clearActive();
   write(LS.schema, SCHEMA_VERSION);
   return failed;
+}
+
+// What `others` holds that `mine` does not. Ids are compared the way the validation writes them: a record here whose
+// id it would rewrite is the same record as its rewritten copy over there. Nothing the other side holds twice is
+// taken twice.
+const missingIn = (mine, others) => {
+  const ids = new Set(mine.map((item) => asId(item.id)));
+  return others.filter((item) => !ids.has(item.id) && ids.add(item.id));
+};
+const newest = (field) => (a, b) => new Date(b[field]) - new Date(a[field]);
+
+// Brings another state of the same account onto this device without taking anything away: `theirs` is a validated
+// backup, usually what the server holds. Workouts, body entries and own exercises are kept from both sides by their
+// id, and where both have one, the copy on this device stays. Plans, settings and exercise preferences are one
+// piece each: `keep` names those this device keeps, the others are taken over. A running workout and the photos
+// already here are not touched. Everything but the new photos is stored before it returns, so nothing else can be
+// stored in between; what it returns is the new photos being stored. Throws when local storage is full; the data
+// then stays as it was.
+export function mergeBackup(theirs, keep = {}) {
+  const keys = [LS.plans, LS.history, LS.body, LS.settings, LS.exercisePrefs, LS.customExercises];
+  const before = keys.map((key) => localStorage.getItem(key));
+  const sessions = missingIn(getHistory(), theirs.history);
+  const entries = missingIn(getBody(), theirs.body);
+  const customs = missingIn(getCustomExercises(), theirs.customExercises || []);
+  const body = [...entries.map(({ photo, ...rest }) => ({ ...rest, hasPhoto: !!photo })), ...getBody()].sort(
+    newest('date')
+  );
+  const stored = [
+    keep.plans || savePlans(theirs.plans),
+    // Record flags depend on everything that came before, so they are worked out again over the joined history.
+    !sessions.length || saveHistory(annotateAll([...sessions, ...getHistory()].sort(newest('finishedAt')))),
+    !entries.length || saveBody(body),
+    keep.settings || saveSettings(theirs.settings),
+    keep.exercisePrefs || savePrefs(theirs.exercisePrefs),
+    !customs.length || saveCustomExercises([...getCustomExercises(), ...customs]),
+  ].every(Boolean);
+  if (!stored) {
+    // Taken back last write first: on the way back the storage then never holds more than it did on the way there.
+    for (let i = keys.length - 1; i >= 0; i--) {
+      if (before[i] === null) localStorage.removeItem(keys[i]);
+      else localStorage.setItem(keys[i], before[i]);
+    }
+    throw new Error('storage');
+  }
+  // Plans from an older version keep custom exercises inside; move them into the store like the migration does.
+  if (!keep.plans) promoteCustomExercises();
+  return storePhotos(entries);
+}
+
+// The same merge worked out without storing anything, for a device whose storage cannot hold it: `mine` is this
+// device's backup as it is uploaded, and so is what comes back.
+export function mergedBackup(mine, theirs, keep = {}) {
+  const sessions = missingIn(mine.history, theirs.history);
+  const entries = missingIn(mine.body, theirs.body);
+  const customs = missingIn(mine.customExercises, theirs.customExercises || []);
+  return {
+    ...mine,
+    plans: keep.plans ? mine.plans : theirs.plans,
+    history: sessions.length
+      ? annotateAll([...sessions, ...mine.history].sort(newest('finishedAt')))
+      : mine.history,
+    body: entries.length ? [...entries, ...mine.body].sort(newest('date')) : mine.body,
+    settings: keep.settings ? mine.settings : theirs.settings,
+    exercisePrefs: keep.exercisePrefs ? mine.exercisePrefs : theirs.exercisePrefs,
+    customExercises: customs.length ? [...mine.customExercises, ...customs] : mine.customExercises,
+  };
 }

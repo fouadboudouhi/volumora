@@ -2741,10 +2741,10 @@ test('the gate: register with an invitation, lose the phone, sign in and get eve
     );
     await page.fill('#syncPassword', 'ein-gutes-passwort');
     await page.click('#syncConnect');
-    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
-    await page.click('.sheet-backdrop.show [data-ok]');
-    // The restore ends with the home screen; only then is everything, chat included, in place.
+    // A new phone has nothing to lose, so nothing is asked. The restore ends with the home screen; only then is
+    // everything, chat included, in place.
     await page.waitForSelector('.next-card');
+    assert.equal(await page.locator('.sheet-backdrop').count(), 0);
     const back = await page.evaluate(async () => {
       const { getHistory, getAiMemory, getAiChat, isOnboarded } = await import('/src/storage.js');
       return {
@@ -2776,6 +2776,367 @@ test('the gate: register with an invitation, lose the phone, sign in and get eve
     syncServer.closeAllConnections?.();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// A sync server of its own for the two tests below, and what they do on a device: start it fresh at the gate, fill
+// the form there or in the sheet, and store a finished workout the way the app does.
+async function accountServer() {
+  const { createSyncServer, store } = await import('../sync-server/server.js');
+  const { mkdtemp, rm, readdir, readFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const dir = await mkdtemp(path.join(tmpdir(), 'volumora-accounts-'));
+  const syncServer = createSyncServer({ dataDir: dir, origins: [baseURL] });
+  await new Promise((resolve) => syncServer.listen(0, '127.0.0.1', resolve));
+  const address = `http://127.0.0.1:${syncServer.address().port}`;
+  return {
+    db: store(dir),
+    async device() {
+      const device = await browser.newContext({ locale: 'de-DE' });
+      const tab = await device.newPage();
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.goto(baseURL + '/');
+      await tab.waitForSelector('#gateForm');
+      return tab;
+    },
+    async fill(tab, { mode, user, password, invite }) {
+      await tab.click(`[data-sync-mode="${mode}"]`);
+      if (await tab.locator('#syncOther').isVisible()) await tab.click('#syncOther');
+      await tab.fill('#syncUrl', address);
+      await tab.fill('#syncUser', user);
+      await tab.fill('#syncPassword', password);
+      if (invite) await tab.fill('#syncInvite', invite);
+      await tab.click('#syncConnect');
+    },
+    // The newest snapshot the server holds for an account, as text.
+    async stored(username) {
+      const folder = path.join(dir, 'users', username, 'snapshots');
+      const files = (await readdir(folder).catch(() => [])).sort();
+      return files.length ? readFile(path.join(folder, files.at(-1)), 'utf8') : '';
+    },
+    async stop() {
+      syncServer.close();
+      syncServer.closeAllConnections?.();
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
+}
+const train = (tab, name, day) =>
+  tab.evaluate(
+    async ([dayName, dayKey]) => {
+      const { getHistory, saveHistory } = await import('/src/storage.js');
+      saveHistory([
+        {
+          id: dayName,
+          planId: 'p',
+          planName: 'P',
+          dayId: 'd',
+          dayName,
+          startedAt: `${dayKey}T09:00:00.000Z`,
+          finishedAt: `${dayKey}T10:00:00.000Z`,
+          day: dayKey,
+          duration: 3600,
+          totalSets: 1,
+          volume: 400,
+          markers: { deload: false, ill: false, pain: false },
+          entries: [
+            {
+              exerciseId: 'e',
+              name: 'Kniebeuge',
+              note: '',
+              sets: [{ weight: '80', reps: '5', rir: '', done: true, warmup: false, type: 'normal' }],
+            },
+          ],
+        },
+        ...getHistory(),
+      ]);
+    },
+    [name, day]
+  );
+const workouts = (tab) =>
+  tab.evaluate(async () => (await import('/src/storage.js')).getHistory().map((h) => h.dayName));
+
+test('a second device gets new workouts by itself, and signing in again after a lost sign-in loses none', async () => {
+  const server = await accountServer();
+  await context.close();
+  let tablet;
+  try {
+    page = await server.device();
+    context = page.context();
+    await server.fill(page, {
+      mode: 'register',
+      user: 'anna',
+      password: 'ein-gutes-passwort',
+      invite: await server.db.createInvite(),
+    });
+    await page.waitForSelector('#onboardingSkip');
+    await page.click('#onboardingSkip');
+    await page.waitForSelector('.next-card');
+    await train(page, 'Erstes vom Handy', '2026-11-02');
+    await page.evaluate(async () => (await import('/src/sync.js')).uploadNow());
+
+    // The tablet signs in: a new device, so nothing is asked and everything is there.
+    tablet = await server.device();
+    await server.fill(tablet, { mode: 'login', user: 'anna', password: 'ein-gutes-passwort' });
+    await tablet.waitForSelector('.next-card');
+    assert.deepEqual(await workouts(tablet), ['Erstes vom Handy']);
+
+    // The phone trains and weighs in with a photo. The tablet is opened again and shows the workout without
+    // anyone doing anything; the photo is there too.
+    await train(page, 'Zweites vom Handy', '2026-11-04');
+    await page.evaluate(
+      async (photo) => {
+        const { photos, saveBody } = await import('/src/storage.js');
+        await photos.set('wiegen', photo);
+        saveBody([
+          { id: 'wiegen', date: '2026-11-04T07:00:00.000Z', day: '2026-11-04', weight: 80, hasPhoto: true },
+        ]);
+        await (await import('/src/sync.js')).uploadNow();
+      },
+      `data:image/png;base64,${PNG.toString('base64')}`
+    );
+    await tablet.reload();
+    await tablet.waitForFunction(() =>
+      /Zweites vom Handy/.test(document.querySelector('[data-last-session]')?.textContent || '')
+    );
+    assert.deepEqual(await workouts(tablet), ['Zweites vom Handy', 'Erstes vom Handy']);
+    const weighed = await tablet.evaluate(async () => {
+      const { photos, getBody } = await import('/src/storage.js');
+      return { entry: getBody()[0], photo: await photos.get('wiegen') };
+    });
+    assert.equal(weighed.entry.hasPhoto, true);
+    assert.match(weighed.photo, /^data:image\/png;base64,/);
+
+    // Both train before they hear of each other. "Save now" on the phone meets the tablet's newer state: it is
+    // merged, and nobody is asked which of the two to lose.
+    await train(tablet, 'Vom Tablet', '2026-11-05');
+    await tablet.evaluate(async () => (await import('/src/sync.js')).uploadNow());
+    await train(page, 'Drittes vom Handy', '2026-11-06');
+    await page.evaluate(async () => (await import('/src/render.js')).navigate('backup'));
+    await page.click('#syncNow');
+    await page.waitForFunction(() => /Gesichert/.test(document.querySelector('.toast')?.textContent || ''));
+    assert.deepEqual(await workouts(page), [
+      'Drittes vom Handy',
+      'Vom Tablet',
+      'Zweites vom Handy',
+      'Erstes vom Handy',
+    ]);
+    assert.match(await server.stored('anna'), /Drittes vom Handy/);
+    assert.match(await server.stored('anna'), /Vom Tablet/);
+    assert.equal(await page.locator('#syncKeep').count(), 0);
+    assert.equal(await page.locator('.sync-on .ai-error').count(), 0);
+
+    // The server forgets every sign-in. The tablet is used on, and the app notices when it tries to save.
+    await server.db.setPassword('anna', 'neues-passwort-1');
+    await train(tablet, 'Ohne Anmeldung', '2026-11-08');
+    await tablet.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      delete document.visibilityState;
+    });
+    await tablet.waitForFunction(
+      () => JSON.parse(localStorage.getItem('volumora-sync')).problem === 'session'
+    );
+    await tablet.evaluate(async () => (await import('/src/render.js')).navigate('home'));
+    await tablet.click('#signInAgain');
+    await tablet.waitForSelector('.sheet .sync-form');
+    // The form knows whose data is on the device: the same server and name are filled in.
+    assert.equal(await tablet.inputValue('.sheet #syncUser'), 'anna');
+    assert.match(await tablet.inputValue('.sheet #syncUrl'), /^http:\/\/127\.0\.0\.1:\d+$/);
+    await tablet.fill('.sheet #syncPassword', 'neues-passwort-1');
+    await tablet.click('.sheet #syncConnect');
+    // Signing in again asks nothing and replaces nothing: the workout made meanwhile stays and reaches the account.
+    await tablet.waitForSelector('.sync-form', { state: 'detached' });
+    assert.equal(await tablet.locator('#signInAgain').count(), 0);
+    assert.deepEqual(await workouts(tablet), [
+      'Ohne Anmeldung',
+      'Drittes vom Handy',
+      'Vom Tablet',
+      'Zweites vom Handy',
+      'Erstes vom Handy',
+    ]);
+    assert.match(await server.stored('anna'), /Ohne Anmeldung/);
+    assert.match(await server.stored('anna'), /Drittes vom Handy/);
+  } finally {
+    await tablet?.context().close();
+    await server.stop();
+  }
+});
+
+test('the next person on the same phone starts empty, and nothing of the first lands in their account', async () => {
+  const server = await accountServer();
+  await context.close();
+  try {
+    page = await server.device();
+    context = page.context();
+    await server.fill(page, {
+      mode: 'register',
+      user: 'anna',
+      password: 'ein-gutes-passwort',
+      invite: await server.db.createInvite(),
+    });
+    await page.waitForSelector('#onboardingSkip');
+    await page.click('#onboardingSkip');
+    await page.waitForSelector('.next-card');
+    await train(page, 'Annas Beintag', '2026-11-10');
+    await page.evaluate(async () => {
+      const { saveAiMemory } = await import('/src/storage.js');
+      saveAiMemory([{ id: 'm', fact: 'Anna: Knie-OP 2025', at: '2026-11-01' }]);
+      (await import('/src/render.js')).navigate('backup');
+    });
+    // Signing out uploads what the app had not saved yet; the data stays on the phone.
+    await page.click('#syncOff');
+    await page.click('.sheet-backdrop.show [data-ok]');
+    await page.waitForSelector('#gateForm');
+    assert.match(await server.stored('anna'), /Annas Beintag/);
+    assert.deepEqual(await workouts(page), ['Annas Beintag']);
+
+    // Ben registers on the same phone. He is told whose data is here and that all of it is in her account.
+    const invite = await server.db.createInvite();
+    const ben = { mode: 'register', user: 'ben', password: 'noch-ein-passwort', invite };
+    await server.fill(page, ben);
+    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+    const question = await page.textContent('.sheet-backdrop.show .sheet');
+    assert.match(question, /„anna“/);
+    assert.match(question, /von diesem Gerät entfernt/);
+    assert.match(question, /alles davon gesichert/);
+    await axeCheck('question about another account’s data');
+    // Leaving changes nothing anywhere: no account, the invitation unused, her data still here.
+    await page.click('.sheet-backdrop.show [data-cancel]');
+    await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+    assert.deepEqual(await server.db.users(), ['anna']);
+    assert.deepEqual(await workouts(page), ['Annas Beintag']);
+    // Had she left in the middle of a workout, he would be told that this one is saved nowhere.
+    await page.evaluate(async () => {
+      const { saveActive } = await import('/src/storage.js');
+      saveActive({ id: 'running', entries: [{ exerciseId: 'e', sets: [{ reps: '5', done: true }] }] });
+    });
+    await page.click('#syncConnect');
+    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+    const warned = await page.textContent('.sheet-backdrop.show .sheet');
+    assert.match(warned, /alles davon gesichert, nur das Training nicht, das gerade läuft/);
+    await page.click('.sheet-backdrop.show [data-cancel]');
+    await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+    // With his yes her data leaves the phone and he starts like on a new one.
+    await page.click('#syncConnect');
+    await page.click('.sheet-backdrop.show [data-ok]');
+    await page.waitForSelector('#onboardingForm');
+    const left = await page.evaluate(async () => {
+      const { getHistory, getAiMemory } = await import('/src/storage.js');
+      return {
+        history: getHistory(),
+        memory: getAiMemory(),
+        user: JSON.parse(localStorage.getItem('volumora-sync')).username,
+      };
+    });
+    assert.deepEqual(left, { history: [], memory: [], user: 'ben' });
+    const his = await server.stored('ben');
+    assert.ok(his.length > 0, 'his account has its first, empty state');
+    assert.doesNotMatch(his, /Annas Beintag|Knie-OP/);
+    assert.match(await server.stored('anna'), /Annas Beintag/, 'her account is as she left it');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('data left by a sign-out before owners were remembered: the person says whose it is', async () => {
+  const server = await accountServer();
+  await context.close();
+  try {
+    page = await server.device();
+    context = page.context();
+    // An installation that was signed out before this update: it holds data, but no note of whose it is.
+    await page.evaluate(() => localStorage.setItem('volumora-onboarded', '1'));
+    await train(page, 'Altes Training', '2026-10-01');
+    await page.reload();
+    await page.waitForSelector('#gateForm');
+    const anna = {
+      mode: 'register',
+      user: 'anna',
+      password: 'ein-gutes-passwort',
+      invite: await server.db.createInvite(),
+    };
+    await server.fill(page, anna);
+    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+    assert.match(
+      await page.textContent('.sheet-backdrop.show .sheet'),
+      /Sind die Daten auf diesem Gerät deine/
+    );
+    // "No" alone removes nothing: removing is asked for, and leaving there changes nothing anywhere.
+    await page.click('.sheet-backdrop.show [data-cancel]');
+    await page.waitForFunction(() =>
+      /Daten von diesem Gerät entfernen/.test(
+        document.querySelector('.sheet-backdrop.show .sheet')?.textContent || ''
+      )
+    );
+    await page.click('.sheet-backdrop.show [data-cancel]');
+    await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+    assert.deepEqual(await server.db.users(), []);
+    assert.deepEqual(await workouts(page), ['Altes Training']);
+    // "Mine": the data stays and goes into the account that signs in.
+    await page.click('#syncConnect');
+    await page.click('.sheet-backdrop.show [data-ok]');
+    await page.waitForSelector('.next-card');
+    assert.deepEqual(await workouts(page), ['Altes Training']);
+    assert.match(await server.stored('anna'), /Altes Training/);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('signing out promises only what it can keep, and says so when not everything was saved', async () => {
+  const sheetText = () => page.textContent('.sheet-backdrop.show .sheet');
+  const signOut = async () => {
+    await page.evaluate(async () => (await import('/src/render.js')).navigate('backup'));
+    await page.click('#syncOff');
+    await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+  };
+  // The server of this installation never answers: what is waiting cannot be uploaded.
+  await signOut();
+  const asked = await sheetText();
+  assert.match(asked, /versucht vorher noch zu sichern, was offen ist, und sagt dir, wenn das nicht gelingt/);
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('#gateForm');
+  await page.waitForFunction(() =>
+    /Nicht alles ist gesichert/.test(document.querySelector('.sheet-backdrop.show .sheet')?.textContent || '')
+  );
+  assert.match(await sheetText(), /konnte vorher nicht mehr alles sichern.*liegt weiter auf diesem Gerät/);
+  await axeCheck('not everything saved at sign-out');
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+  assert.equal(await page.evaluate(() => localStorage.getItem('volumora-sync')), null);
+
+  // With a sign-in that has expired nothing is uploaded at all, and the question says so.
+  await page.evaluate(() => {
+    const config = { url: 'http://127.0.0.1:9', username: 'test', token: 'test.t', problem: 'session' };
+    localStorage.setItem('volumora-sync', JSON.stringify(config));
+  });
+  await signOut();
+  const expired = await sheetText();
+  assert.match(expired, /Die Anmeldung ist abgelaufen, deshalb kann die App vorher nichts mehr sichern/);
+  assert.doesNotMatch(expired, /versucht vorher/);
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForFunction(() =>
+    /Nicht alles ist gesichert/.test(document.querySelector('.sheet-backdrop.show .sheet')?.textContent || '')
+  );
+  await page.click('.sheet-backdrop.show [data-ok]');
+  await page.waitForSelector('.sheet-backdrop', { state: 'detached' });
+
+  // Someone else wants in while a workout is still running here. Nothing was ever uploaded from this device, and
+  // the running workout is named on top of that.
+  await page.evaluate(async () => {
+    const { saveActive } = await import('/src/storage.js');
+    saveActive({ id: 'running', entries: [{ exerciseId: 'e', sets: [{ reps: '5', done: true }] }] });
+  });
+  await page.click('[data-sync-mode="login"]');
+  await page.fill('#syncUser', 'ben');
+  await page.fill('#syncPassword', 'noch-ein-passwort');
+  await page.click('#syncConnect');
+  await page.waitForSelector('.sheet-backdrop.show [data-ok]');
+  assert.match(
+    await sheetText(),
+    /Ob alles davon gesichert ist, weiß die App nicht\. Das Training, das gerade läuft, ist nirgends gesichert/
+  );
+  await page.click('.sheet-backdrop.show [data-cancel]');
 });
 
 test('the admin stores the Claude key, sets budgets and invites; everyone else just chats', async () => {

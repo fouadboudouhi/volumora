@@ -484,7 +484,8 @@ const ui = {
   'sync.serverIs': 'Server: {host}.',
   'sync.otherServer': 'Anderen Server verwenden',
   'sync.expiredTitle': 'Bitte neu anmelden',
-  'sync.expiredText': 'Deine Anmeldung am Server ist abgelaufen. Bis dahin wird nichts gesichert.',
+  'sync.expiredText':
+    'Deine Anmeldung am Server ist abgelaufen. Bis du dich neu anmeldest, wird nichts gesichert. Verloren geht dabei nichts.',
   'sync.title': 'Auf eigenem Server sichern',
   'sync.hint':
     'Die App sichert deine Daten von selbst auf dem Server. Nach einer Neuinstallation meldest du dich an und bekommst alles zurück.',
@@ -506,17 +507,43 @@ const ui = {
   'sync.foundLoad': 'Laden',
   'sync.restored': 'Daten vom Server geladen',
   'sync.connected': 'Angemeldet, die App sichert ab jetzt von selbst',
+  'sync.merged': 'Angemeldet. Die Daten auf diesem Gerät und im Konto sind zusammengeführt.',
+  'sync.waiting': 'Angemeldet. Der Abgleich mit dem Server steht noch aus, die App versucht es wieder.',
+  'sync.news': 'Neue Daten von einem anderen Gerät übernommen',
+  'sync.otherTitle': 'Hier liegen Daten von „{user}“',
+  'sync.otherText':
+    'Die Trainingsdaten auf diesem Gerät gehören zum Konto „{user}“. Bevor du dich als „{next}“ anmeldest, werden sie von diesem Gerät entfernt.',
+  'sync.otherSaved': 'Im Konto „{user}“ ist alles davon gesichert.',
+  'sync.otherSavedRunning':
+    'Im Konto „{user}“ ist alles davon gesichert, nur das Training nicht, das gerade läuft: Es geht dabei verloren.',
+  'sync.otherRunning': 'Das Training, das gerade läuft, ist nirgends gesichert und geht dabei verloren.',
+  'sync.otherUnsaved':
+    'Achtung: Was seit {date} dazugekommen ist oder geändert wurde, gibt es nur auf diesem Gerät. Es geht dabei verloren.',
+  'sync.otherUnknown': 'Ob alles davon gesichert ist, weiß die App nicht.',
+  'sync.otherConfirm': 'Entfernen und anmelden',
+  'sync.unknownTitle': 'Sind die Daten auf diesem Gerät deine?',
+  'sync.unknownText':
+    'Auf diesem Gerät liegen Trainingsdaten aus einer früheren Anmeldung. Zu welchem Konto sie gehören, weiß die App nicht mehr. Wenn es deine sind, kommen sie in das Konto „{next}“.',
+  'sync.unknownMine': 'Ja, das sind meine',
+  'sync.unknownNotMine': 'Nein',
+  'sync.removeTitle': 'Daten von diesem Gerät entfernen?',
+  'sync.removeText':
+    'Dann werden die Trainingsdaten von diesem Gerät entfernt, bevor du dich als „{next}“ anmeldest. Ob sie irgendwo gesichert sind, weiß die App nicht.',
   'sync.on': 'Angemeldet als {user} bei {host}. Die App sichert Änderungen von selbst.',
   'sync.lastDone': 'Zuletzt gesichert: {date}',
   'sync.now': 'Jetzt sichern',
   'sync.saved': 'Gesichert',
   'sync.load': 'Vom Server laden',
-  'sync.keepThis': 'Stand dieses Geräts behalten',
   'sync.nothing': 'Auf dem Server liegt noch nichts.',
   'sync.off': 'Abmelden',
   'sync.offTitle': 'Vom Server abmelden?',
   'sync.offText':
-    'Deine Daten auf dem Server und auf diesem Gerät bleiben. Um die App weiter zu nutzen, musst du dich wieder anmelden.',
+    'Die App versucht vorher noch zu sichern, was offen ist, und sagt dir, wenn das nicht gelingt. Deine Daten bleiben auf diesem Gerät, und was gesichert ist, bleibt auf dem Server. Um die App weiter zu nutzen, musst du dich wieder anmelden. Meldet sich hier ein anderes Konto an, werden die Daten vorher von diesem Gerät entfernt.',
+  'sync.offTextExpired':
+    'Die Anmeldung ist abgelaufen, deshalb kann die App vorher nichts mehr sichern: Was seit dem letzten Sichern geändert wurde, gibt es nur auf diesem Gerät. Deine Daten bleiben auf diesem Gerät, und was gesichert ist, bleibt auf dem Server. Um die App weiter zu nutzen, musst du dich wieder anmelden. Meldet sich hier ein anderes Konto an, werden die Daten vorher von diesem Gerät entfernt.',
+  'sync.offUnsavedTitle': 'Nicht alles ist gesichert',
+  'sync.offUnsaved':
+    'Du bist abgemeldet. Die App konnte vorher nicht mehr alles sichern. Was fehlt, liegt weiter auf diesem Gerät: Melde dich hier wieder an, damit die App es sichern kann.',
   'sync.error.url': 'Bitte trag eine Adresse ein, die mit https beginnt.',
   'sync.error.network': 'Der Server ist gerade nicht erreichbar. Die App versucht es später noch einmal.',
   'sync.error.user': 'Benutzername oder Passwort stimmt nicht.',
@@ -528,7 +555,10 @@ const ui = {
   'sync.error.blocked': 'Zu viele falsche Versuche. Warte ein paar Minuten.',
   'sync.error.size': 'Deine Daten sind zu groß für den Server.',
   'sync.error.newer':
-    'Auf dem Server liegen neuere Daten von einem anderen Gerät. Entscheide, welcher Stand gilt.',
+    'Auf dem Server liegen neuere Daten von einem anderen Gerät. Die App führt beide Stände beim nächsten Sichern zusammen.',
+  'sync.error.other': 'Auf diesem Gerät liegen Daten eines anderen Kontos.',
+  'sync.error.storage':
+    'Der Speicher dieses Geräts ist voll. Was ein anderes Gerät gesichert hat, passt hier nicht mehr hinein und fehlt auf diesem Gerät. Was auf diesem Gerät liegt, ist im Konto gesichert. Sobald hier wieder Platz ist, holt die App den Rest nach.',
   'sync.error.server': 'Der Server hat einen Fehler gemeldet.',
   'admin.title': 'Verwaltung',
   'admin.hint': 'Claude-Schlüssel, Budgets und Einladungen',

@@ -6,40 +6,75 @@ import {
   DEFAULT_SYNC_URL,
   SyncError,
   cleanSyncUrl,
+  dataOwner,
+  deviceData,
   fetchSnapshot,
+  joinAccount,
   refreshMe,
   register,
   restoreSnapshot,
   signIn,
   signOut,
   syncConfig,
-  uploadNow,
+  syncNow,
 } from '../sync.js';
-import { confirmDialog, sheet, toast } from '../ui.js';
+import { confirmDialog, infoDialog, sheet, toast } from '../ui.js';
 import { esc, fmtLong } from '../util.js';
 
 const errorText = (err) => t(`sync.error.${err instanceof SyncError ? err.code : 'server'}`);
 
-// Afterwards this device and the server hold the same data. Data already on the server is never replaced from here.
-async function connect(config, done) {
+// The data on a device belongs to one account. Before anyone else signs in over it, the person is told whose data
+// is here, what becomes of it, and whether all of it had been uploaded. This happens before the server hears
+// anything, so leaving changes nothing anywhere. Returns the decision for joinAccount, or null for "leave it".
+async function askAboutDeviceData(account) {
+  const data = await deviceData(account);
+  const next = account.username;
+  if (data.whose === 'unknown') {
+    // From before the app noted whose data it holds: only the person can say. "No" alone removes nothing.
+    const mine = await confirmDialog({
+      title: t('sync.unknownTitle'),
+      text: t('sync.unknownText', { next }),
+      confirmLabel: t('sync.unknownMine'),
+      cancelLabel: t('sync.unknownNotMine'),
+    });
+    if (mine) return { adopt: true };
+    const remove = await confirmDialog({
+      title: t('sync.removeTitle'),
+      text: t('sync.removeText', { next }),
+      confirmLabel: t('sync.otherConfirm'),
+      danger: true,
+    });
+    return remove ? { replace: true } : null;
+  }
+  if (data.whose !== 'other') return {};
+  const user = data.url === account.url ? data.username : `${data.username} (${new URL(data.url).host})`;
+  const uploaded = data.saved
+    ? t(data.running ? 'sync.otherSavedRunning' : 'sync.otherSaved', { user })
+    : data.at
+      ? t('sync.otherUnsaved', { date: new Date(data.at).toLocaleString() })
+      : t('sync.otherUnknown');
+  // A running workout is never uploaded: it goes with the rest, whatever else was saved.
+  const running = data.running && !data.saved ? ` ${t('sync.otherRunning')}` : '';
+  const ok = await confirmDialog({
+    title: t('sync.otherTitle', { user }),
+    text: `${t('sync.otherText', { user, next })} ${uploaded}${running}`,
+    confirmLabel: t('sync.otherConfirm'),
+    danger: true,
+  });
+  return ok ? { replace: true } : null;
+}
+
+// Afterwards this device and the account hold the same data. The account's own data on this device is merged with
+// what the server holds; neither side is replaced.
+async function connect(config, decision, done) {
   const me = await refreshMe(config).catch(() => null);
   if (me) config = { ...config, admin: !!me.admin, ai: me.ai || null };
-  const found = await fetchSnapshot(config);
-  if (found) {
-    const ok = await confirmDialog({
-      title: t('sync.foundTitle'),
-      text: t('sync.foundText', { date: fmtLong(found.data?.savedAt || new Date()) }),
-      confirmLabel: t('sync.foundLoad'),
-    });
-    if (!ok) return;
-    await restoreSnapshot(config, found);
-    done();
-    toast(t('sync.restored'));
-    return;
-  }
-  await uploadNow(config, { force: true });
+  const outcome = await joinAccount(config, decision);
+  // Another account's data was just removed: the app starts over, so nothing of it lingers on screen or in memory.
+  if (decision.replace) return location.reload();
   done();
-  toast(t('sync.connected'));
+  const said = { uploaded: 'sync.connected', merged: 'sync.merged', waiting: 'sync.waiting' };
+  toast(t(said[outcome] || 'sync.restored'));
 }
 
 // The form itself, for the sheet on the backup screen and for the gate at the start. The server is set; only
@@ -51,8 +86,13 @@ export function syncForm({ onDone = () => render(), mode = 'register', close = (
   box.noValidate = true;
   const modeButton = (name, label) =>
     `<button type="button" class="${name === mode ? 'active' : ''}" data-sync-mode="${name}" aria-pressed="${name === mode}">${label}</button>`;
-  box.innerHTML = `<div class="segmented small" role="group" aria-label="${t('sync.title')}">${modeButton('register', t('sync.modeRegister'))}${modeButton('login', t('sync.modeLogin'))}</div><label><span>${t('sync.username')}</span><input id="syncUser" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="32"></label><label><span>${t('sync.password')}</span><input id="syncPassword" type="password" autocomplete="${mode === 'register' ? 'new-password' : 'current-password'}" minlength="8"></label><label id="syncInviteRow" ${mode === 'register' ? '' : 'hidden'}><span>${t('sync.invite')}</span><input id="syncInvite" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="xxxx-xxxx-xxxx"></label><p class="muted settings-hint" id="syncRegisterHint" ${mode === 'register' ? '' : 'hidden'}>${t('sync.registerHint')}</p><p class="muted settings-hint sync-server"><span>${t('sync.serverIs', { host: esc(new URL(DEFAULT_SYNC_URL).host) })}</span> <button type="button" class="text-btn" id="syncOther">${t('sync.otherServer')}</button></p><label id="syncUrlRow" hidden><span>${t('sync.url')}</span><input id="syncUrl" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" value="${esc(DEFAULT_SYNC_URL)}"></label><p class="ai-error" role="alert" id="syncError" hidden></p><button class="primary full" type="submit" id="syncConnect">${t(mode === 'register' ? 'sync.register' : 'sync.signIn')}</button>`;
+  // Whoever signs in again does so where the data on this device belongs: the same server, and the same name.
+  const owner = dataOwner();
+  const ownServer = !!owner && owner.url !== DEFAULT_SYNC_URL;
+  box.innerHTML = `<div class="segmented small" role="group" aria-label="${t('sync.title')}">${modeButton('register', t('sync.modeRegister'))}${modeButton('login', t('sync.modeLogin'))}</div><label><span>${t('sync.username')}</span><input id="syncUser" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="32" value="${mode === 'login' ? esc(owner?.username || '') : ''}"></label><label><span>${t('sync.password')}</span><input id="syncPassword" type="password" autocomplete="${mode === 'register' ? 'new-password' : 'current-password'}" minlength="8"></label><label id="syncInviteRow" ${mode === 'register' ? '' : 'hidden'}><span>${t('sync.invite')}</span><input id="syncInvite" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="xxxx-xxxx-xxxx"></label><p class="muted settings-hint" id="syncRegisterHint" ${mode === 'register' ? '' : 'hidden'}>${t('sync.registerHint')}</p><p class="muted settings-hint sync-server" ${ownServer ? 'hidden' : ''}><span>${t('sync.serverIs', { host: esc(new URL(DEFAULT_SYNC_URL).host) })}</span> <button type="button" class="text-btn" id="syncOther">${t('sync.otherServer')}</button></p><label id="syncUrlRow" ${ownServer ? '' : 'hidden'}><span>${t('sync.url')}</span><input id="syncUrl" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" value="${esc(owner?.url || DEFAULT_SYNC_URL)}"></label><p class="ai-error" role="alert" id="syncError" hidden></p><button class="primary full" type="submit" id="syncConnect">${t(mode === 'register' ? 'sync.register' : 'sync.signIn')}</button>`;
   let registering = mode === 'register';
+  // What the person decided about another account's data, kept for this form: a mistyped password asks only once.
+  let agreed = null;
   box.querySelectorAll('[data-sync-mode]').forEach((button) => {
     button.addEventListener('click', () => {
       registering = button.dataset.syncMode === 'register';
@@ -91,10 +131,16 @@ export function syncForm({ onDone = () => render(), mode = 'register', close = (
     if (registering && !invite) return fail('invite');
     button.disabled = true;
     try {
+      const account = `${url} ${username}`;
+      if (agreed?.account !== account) {
+        const decision = await askAboutDeviceData({ url, username });
+        if (!decision) return;
+        agreed = { account, decision };
+      }
       const config = registering
         ? await register(url, username, password, invite)
         : await signIn(url, username, password);
-      await connect(config, () => {
+      await connect(config, agreed.decision, () => {
         close();
         onDone();
       });
@@ -120,14 +166,11 @@ export function syncSection() {
   const status = config.problem
     ? `<p class="ai-error" role="alert">${t(`sync.error.${config.problem}`)}</p>`
     : `<p class="muted settings-hint">${config.at ? t('sync.lastDone', { date: new Date(config.at).toLocaleString() }) : ''}</p>`;
-  const conflict = config.problem === 'newer';
   const expired = config.problem === 'session';
   return `<section class="list-section sync-on"><h2>${t('sync.title')}</h2><p class="settings-hint">${t('sync.on', { user: esc(config.username || ''), host: esc(new URL(config.url).host) })}</p>${status}<div class="sync-actions">${
     expired
       ? `<button type="button" class="secondary full" id="syncOpen">${t('sync.signInAgain')}</button>`
-      : conflict
-        ? `<button type="button" class="secondary full" id="syncLoad">${t('sync.load')}</button><button type="button" class="secondary full" id="syncKeep">${t('sync.keepThis')}</button>`
-        : `<button type="button" class="secondary full" id="syncNow">${t('sync.now')}</button><button type="button" class="secondary full" id="syncLoad">${t('sync.load')}</button>`
+      : `<button type="button" class="secondary full" id="syncNow">${t('sync.now')}</button><button type="button" class="secondary full" id="syncLoad">${t('sync.load')}</button>`
   }<button type="button" class="text-btn" id="syncOff">${t('sync.off')}</button></div></section>`;
 }
 
@@ -143,14 +186,9 @@ export function bindSync() {
       }
       render();
     });
+  // Brings in what another device saved, then uploads: newer data on the server is merged, never overwritten.
   guarded('#syncNow', async () => {
-    await uploadNow(syncConfig(), { force: true });
-    toast(t('sync.saved'));
-  });
-  guarded('#syncKeep', async () => {
-    const config = syncConfig();
-    const found = await fetchSnapshot(config);
-    await uploadNow({ ...config, version: found?.version }, { force: true });
+    await syncNow({ look: true, force: true });
     toast(t('sync.saved'));
   });
   guarded('#syncLoad', async () => {
@@ -166,14 +204,20 @@ export function bindSync() {
     await restoreSnapshot(config, found);
     toast(t('sync.restored'));
   });
-  document.querySelector('#syncOff')?.addEventListener('click', async () => {
+  document.querySelector('#syncOff')?.addEventListener('click', async (e) => {
+    const button = e.currentTarget;
+    // An expired sign-in uploads nothing any more, so the question promises nothing of the kind.
+    const expired = syncConfig()?.problem === 'session';
     const ok = await confirmDialog({
       title: t('sync.offTitle'),
-      text: t('sync.offText'),
+      text: t(expired ? 'sync.offTextExpired' : 'sync.offText'),
       confirmLabel: t('sync.off'),
     });
     if (!ok) return;
-    await signOut();
+    // Signing out uploads what is still waiting first, which can take a moment.
+    button.disabled = true;
+    const saved = await signOut();
     render();
+    if (!saved) infoDialog(t('sync.offUnsavedTitle'), t('sync.offUnsaved'));
   });
 }
